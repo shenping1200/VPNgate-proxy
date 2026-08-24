@@ -17,13 +17,17 @@ import (
 // Each device keeps its own TUN interface (e.g. fpx100, fpx101, ...); combined
 // with the proxy's per-interface SO_BINDTODEVICE binding this lets every SOCKS5
 // port exit through a distinct VPNGate node without a global policy route.
-// sanitizePoolConfig strips directives that would hijack the host's default
-// route. Pool tunnels must NOT become the machine's default gateway — proxy
-// sockets bind to each tunnel via SO_BINDTODEVICE, so the host keeps its own
-// routing. VPNGate .ovpn files typically ship `redirect-gateway`, which
-// --route-nopull does NOT suppress because it lives in the file, not in a push.
+// sanitizePoolConfig strips directives that would either hijack the host's
+// default route or break an older OpenVPN. Pool tunnels must NOT become the
+// machine's default gateway — proxy sockets bind to each tunnel via
+// SO_BINDTODEVICE, so the host keeps its own routing. VPNGate .ovpn files
+// typically ship `redirect-gateway` (which --route-nopull does NOT suppress
+// because it lives in the file, not in a push) and `data-ciphers` (an OpenVPN
+// 2.5+ directive that 2.4.x rejects as "Unrecognized option"). We strip both so
+// the pool works on the distro's OpenVPN (2.4.x) without a version upgrade.
 func sanitizePoolConfig(text string) string {
 	lines := strings.Split(text, "\n")
+	hasCipher := false
 	out := make([]string, 0, len(lines))
 	for _, ln := range lines {
 		t := strings.TrimSpace(ln)
@@ -32,10 +36,20 @@ func sanitizePoolConfig(text string) string {
 			continue
 		}
 		fields := strings.Fields(t)
-		if len(fields) > 0 && (fields[0] == "redirect-gateway" || fields[0] == "redirect-private") {
-			continue
+		if len(fields) > 0 {
+			switch fields[0] {
+			case "redirect-gateway", "redirect-private", "data-ciphers", "data-ciphers-fallback":
+				continue
+			case "cipher":
+				hasCipher = true
+			}
 		}
 		out = append(out, ln)
+	}
+	// 2.4.x needs an explicit cipher; VPNGate configs rely on data-ciphers only,
+	// so provide a broadly-compatible fallback when none is present.
+	if !hasCipher {
+		out = append(out, "cipher AES-256-CBC")
 	}
 	return strings.Join(out, "\n")
 }
