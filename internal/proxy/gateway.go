@@ -92,7 +92,7 @@ func (g *Gateway) allowClient(conn net.Conn) bool {
 	extOK := g.opts.ExternalAllowed != nil && g.opts.ExternalAllowed()
 	auth := g.authEnabled()
 	allowed := extOK && auth
-	slog.Debug("allowClient", "remote", remote, "loopback", loop, "external_allowed", extOK, "auth_enabled", auth, "allowed", allowed)
+	slog.Info("allowClient decision", "remote", remote, "loopback", loop, "external_allowed", extOK, "auth_enabled", auth, "allowed", allowed)
 	return allowed
 }
 

@@ -11,6 +11,7 @@ import (
 // or HTTP (ASCII method letter). It enforces the connection cap first.
 func (g *Gateway) handle(ctx context.Context, conn net.Conn) {
 	if !g.allowClient(conn) {
+		slog.Warn("client denied by access policy", "module", "proxy", "remote", conn.RemoteAddr().String())
 		_ = conn.Close() // external client blocked by access policy
 		return
 	}
