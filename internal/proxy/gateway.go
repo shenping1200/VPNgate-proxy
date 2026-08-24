@@ -7,6 +7,7 @@ package proxy
 import (
 	"context"
 	"crypto/subtle"
+	"log/slog"
 	"net"
 	"strconv"
 	"sync"
@@ -83,11 +84,16 @@ func (g *Gateway) requireProtocolAuth() bool { return g.authEnabled() }
 // still authenticate when credentials are configured. External clients require
 // the toggle to be on AND proxy auth to be configured, preventing an open relay.
 func (g *Gateway) allowClient(conn net.Conn) bool {
-	if isLoopbackAddr(conn.RemoteAddr().String()) {
+	remote := conn.RemoteAddr().String()
+	loop := isLoopbackAddr(remote)
+	if loop {
 		return true
 	}
 	extOK := g.opts.ExternalAllowed != nil && g.opts.ExternalAllowed()
-	return extOK && g.authEnabled()
+	auth := g.authEnabled()
+	allowed := extOK && auth
+	slog.Debug("allowClient", "remote", remote, "loopback", loop, "external_allowed", extOK, "auth_enabled", auth, "allowed", allowed)
+	return allowed
 }
 
 func isLoopbackAddr(remoteAddr string) bool {
