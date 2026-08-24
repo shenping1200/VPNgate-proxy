@@ -6,6 +6,11 @@
 // node simply fills START_PORT, the next fills START_PORT+1, and so on. Each
 // port also retries the next candidate node (up to FREE_PROXY_POOL_BUILD_RETRIES
 // extra attempts) before being considered unavailable.
+//
+// Reconcile is incremental: healthy slots keep their existing port and node,
+// only dead slots are replaced and new slots are appended. Candidate-list churn
+// (new nodes discovered or old nodes cooling down) no longer tears down the
+// whole pool.
 package pool
 
 import (
@@ -122,8 +127,10 @@ func (m *Manager) loop(ctx context.Context) {
 	}
 }
 
-// reconcile rebuilds the slot set only when the candidate set changes or a
-// running slot has died, so healthy slots are not disturbed on every tick.
+// reconcile performs incremental maintenance on the pool: healthy slots keep
+// their port and node; only dead or missing slots are repaired in-place, and
+// new slots are appended when more candidates become available. The whole pool
+// is no longer torn down when the candidate list changes.
 func (m *Manager) reconcile(ctx context.Context) {
 	if !m.reconMu.TryLock() {
 		slog.Warn("pool reconcile already in progress; skipping tick", "module", "pool")
@@ -140,26 +147,60 @@ func (m *Manager) reconcile(ctx context.Context) {
 		candidates = candidates[:m.cfg.PoolMaxPorts]
 	}
 
-	m.mu.Lock()
-	same := len(candidates) == len(m.slots)
-	if same {
-		for i, c := range candidates {
-			s := m.slots[i]
-			if s == nil || s.NodeID != c.ID || !s.Managed.Running() {
-				same = false
-				break
+	target := len(candidates)
+	if target > m.cfg.PoolMaxPorts {
+		target = m.cfg.PoolMaxPorts
+	}
+
+	slog.Info("pool reconcile tick", "module", "pool",
+		"candidates", len(candidates), "live_slots", m.liveCount(),
+		"total_ports", m.slotLen(), "target", target)
+
+	// 1. Repair dead / nil slots in-place, keeping their port.
+	for i := 0; i < m.slotLen(); i++ {
+		if !m.slotHealthy(i) {
+			port := m.cfg.PoolStartPort + i
+			slog.Info("pool replacing dead slot", "module", "pool", "port", port)
+			m.teardownSlotAt(i)
+			if slot := m.tryFillPort(ctx, port, candidates); slot != nil {
+				m.setSlot(i, slot)
+			} else {
+				m.setSlot(i, nil)
 			}
 		}
 	}
-	m.mu.Unlock()
-	if same {
-		return
+
+	// 2. Grow to the target count: fill holes first, then append.
+	for m.liveCount() < target {
+		hole := m.firstHole()
+		if hole >= 0 {
+			port := m.cfg.PoolStartPort + hole
+			if slot := m.tryFillPort(ctx, port, candidates); slot != nil {
+				m.setSlot(hole, slot)
+				continue
+			}
+		}
+		port := m.cfg.PoolStartPort + m.slotLen()
+		if slot := m.tryFillPort(ctx, port, candidates); slot != nil {
+			m.appendSlot(slot)
+		} else {
+			break
+		}
 	}
 
-	slog.Info("pool reconciling", "module", "pool",
-		"candidates", len(candidates), "current_slots", len(m.slots))
-	m.teardownAll()
-	m.build(ctx, candidates)
+	// 3. Shrink if the candidate pool has shrunk: remove slots from the tail.
+	for m.liveCount() > target {
+		lastIdx := m.lastLiveIndex()
+		if lastIdx < 0 {
+			break
+		}
+		m.teardownSlotAt(lastIdx)
+		m.setSlot(lastIdx, nil)
+	}
+	m.trimTrailingNils()
+
+	slog.Info("pool reconcile done", "module", "pool",
+		"live_slots", m.liveCount(), "total_ports", m.slotLen())
 }
 
 // candidateNodes returns the usable nodes, best first, excluding ones already
@@ -185,11 +226,8 @@ func (m *Manager) candidateNodes(ctx context.Context) ([]domain.ProxyNodeRead, e
 	return out, nil
 }
 
-// build starts one tunnel + SOCKS5 listener per SOCKS5 port. Ports are assigned
-// by the count of successfully-up slots (port = PoolStartPort + liveCount), so a
-// failed node leaves no gap: the next working candidate simply fills the next
-// contiguous port. Each port tries the next candidate node up to
-// PoolBuildRetries extra times before giving up.
+// build performs a one-shot full build of the pool. It is kept for manual use;
+// normal operation relies on reconcile, which is incremental.
 func (m *Manager) build(ctx context.Context, candidates []domain.ProxyNodeRead) {
 	m.mu.Lock()
 	m.slots = make([]*Slot, 0, len(candidates))
@@ -200,9 +238,8 @@ func (m *Manager) build(ctx context.Context, candidates []domain.ProxyNodeRead) 
 		extra = 0
 	}
 
-	cursor := 0 // index into candidates; advances only when a node is consumed
+	cursor := 0
 	for cursor < len(candidates) {
-		// Already have enough slots to fill the max port budget.
 		m.mu.Lock()
 		if len(m.slots) >= m.cfg.PoolMaxPorts {
 			m.mu.Unlock()
@@ -210,13 +247,13 @@ func (m *Manager) build(ctx context.Context, candidates []domain.ProxyNodeRead) 
 		}
 		m.mu.Unlock()
 
-		// Try the current candidate plus up to `extra` fallbacks for THIS port.
 		var slot *Slot
 		triedIDs := make([]string, 0, extra+1)
 		for attempt := 0; attempt <= extra && cursor < len(candidates); attempt, cursor = attempt+1, cursor+1 {
 			node := candidates[cursor]
 			triedIDs = append(triedIDs, node.ID)
-			s := m.tryStartSlot(ctx, node)
+			port := m.cfg.PoolStartPort + len(m.slots)
+			s := m.startNode(ctx, port, node)
 			if s != nil {
 				slot = s
 				break
@@ -224,10 +261,6 @@ func (m *Manager) build(ctx context.Context, candidates []domain.ProxyNodeRead) 
 		}
 
 		if slot == nil {
-			// Every candidate we tried for this port failed; mark them all
-			// unavailable so discovery can cool them down, then move on. The port
-			// stays unfilled (no gap is created because we never advance a port
-			// without a live slot).
 			for _, id := range triedIDs {
 				_ = m.nodes.MarkUnavailable(ctx, id)
 			}
@@ -246,15 +279,36 @@ func (m *Manager) build(ctx context.Context, candidates []domain.ProxyNodeRead) 
 	}
 }
 
-// tryStartSlot attempts to bring up one tunnel + SOCKS5 gateway for node on the
-// next free contiguous port (PoolStartPort + current live count). It returns the
-// Slot on success, or nil (after cleaning up the half-built tunnel) on failure.
-func (m *Manager) tryStartSlot(ctx context.Context, node domain.ProxyNodeRead) *Slot {
-	m.mu.Lock()
-	portOffset := len(m.slots)
-	m.mu.Unlock()
-	port := m.cfg.PoolStartPort + portOffset
-	device := fmt.Sprintf("%s%d", m.cfg.ProbeDevicePrefix, m.cfg.PoolDeviceBase+portOffset)
+// tryFillPort attempts to start a slot on the requested port using candidates
+// that are not already used by another healthy slot. If every unused candidate
+// fails, it falls back to any candidate.
+func (m *Manager) tryFillPort(ctx context.Context, port int, candidates []domain.ProxyNodeRead) *Slot {
+	used := m.usedNodeIDs()
+	for _, n := range candidates {
+		if _, ok := used[n.ID]; ok {
+			continue
+		}
+		if s := m.startNode(ctx, port, n); s != nil {
+			return s
+		}
+	}
+	for _, n := range candidates {
+		if s := m.startNode(ctx, port, n); s != nil {
+			return s
+		}
+	}
+	return nil
+}
+
+// startNode attempts to bring up one tunnel + SOCKS5 gateway for node on the
+// requested port. It returns the Slot on success, or nil (after cleaning up the
+// half-built tunnel) on failure.
+func (m *Manager) startNode(ctx context.Context, port int, node domain.ProxyNodeRead) *Slot {
+	offset := port - m.cfg.PoolStartPort
+	if offset < 0 {
+		offset = 0
+	}
+	device := fmt.Sprintf("%s%d", m.cfg.ProbeDevicePrefix, m.cfg.PoolDeviceBase+offset)
 
 	target, err := m.nodes.GetTarget(ctx, node.ID)
 	if err != nil {
@@ -305,7 +359,7 @@ func (m *Manager) tryStartSlot(ctx context.Context, node domain.ProxyNodeRead) *
 		return nil
 	}
 	return &Slot{
-		Index:     portOffset,
+		Index:     offset,
 		Port:      port,
 		Device:    device,
 		NodeID:    node.ID,
@@ -322,6 +376,9 @@ func (m *Manager) teardownAll() {
 	m.slots = nil
 	m.mu.Unlock()
 	for _, s := range slots {
+		if s == nil {
+			continue
+		}
 		if s.Gateway != nil {
 			_ = s.Gateway.Stop()
 		}
@@ -337,6 +394,9 @@ func (m *Manager) Slots() []SlotView {
 	defer m.mu.Unlock()
 	out := make([]SlotView, 0, len(m.slots))
 	for _, s := range m.slots {
+		if s == nil {
+			continue
+		}
 		uptime := int64(0)
 		if !s.StartedAt.IsZero() {
 			uptime = int64(time.Since(s.StartedAt).Seconds())
@@ -354,20 +414,131 @@ func (m *Manager) Slots() []SlotView {
 	return out
 }
 
-// Size returns the number of currently mapped ports.
+// Size returns the number of currently live slots.
 func (m *Manager) Size() int {
+	return m.liveCount()
+}
+
+// ReconcileNow forces an immediate incremental reconcile of the pool. Healthy
+// slots are preserved; only dead slots are repaired and new slots appended.
+func (m *Manager) ReconcileNow(ctx context.Context) {
+	slog.Info("pool manual reconcile requested", "module", "pool")
+	m.reconcile(ctx)
+}
+
+// slotLen returns the number of allocated port positions (including nil holes).
+func (m *Manager) slotLen() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return len(m.slots)
 }
 
-// ReconcileNow forces an immediate rebalance of the pool. It tears down every
-// slot and rebuilds from the current candidate set (same path as the periodic
-// reconcile). Use it after node availability changes without waiting for the
-// next tick.
-func (m *Manager) ReconcileNow(ctx context.Context) {
-	slog.Info("pool manual reconcile requested", "module", "pool")
-	m.reconcile(ctx)
+// liveCount returns the number of healthy running slots.
+func (m *Manager) liveCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for _, s := range m.slots {
+		if s != nil && s.Managed != nil && s.Managed.Running() {
+			n++
+		}
+	}
+	return n
+}
+
+// slotHealthy reports whether the slot at index i is running.
+func (m *Manager) slotHealthy(i int) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if i >= len(m.slots) {
+		return true
+	}
+	s := m.slots[i]
+	return s != nil && s.Managed != nil && s.Managed.Running()
+}
+
+// setSlot writes slot at index i, growing the slice with nils if necessary.
+func (m *Manager) setSlot(i int, slot *Slot) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for len(m.slots) <= i {
+		m.slots = append(m.slots, nil)
+	}
+	m.slots[i] = slot
+}
+
+// appendSlot appends a slot at the end of the slice.
+func (m *Manager) appendSlot(slot *Slot) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.slots = append(m.slots, slot)
+}
+
+// teardownSlotAt stops the components of the slot at index i without modifying
+// the slice. It is safe to call on a nil slot.
+func (m *Manager) teardownSlotAt(i int) {
+	m.mu.Lock()
+	if i >= len(m.slots) {
+		m.mu.Unlock()
+		return
+	}
+	s := m.slots[i]
+	m.mu.Unlock()
+	if s == nil {
+		return
+	}
+	if s.Gateway != nil {
+		_ = s.Gateway.Stop()
+	}
+	if s.Managed != nil {
+		s.Managed.Stop()
+	}
+}
+
+// lastLiveIndex returns the highest index that holds a non-nil slot, or -1.
+func (m *Manager) lastLiveIndex() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := len(m.slots) - 1; i >= 0; i-- {
+		if m.slots[i] != nil {
+			return i
+		}
+	}
+	return -1
+}
+
+// firstHole returns the lowest index holding a nil slot, or -1 if none.
+func (m *Manager) firstHole() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i, s := range m.slots {
+		if s == nil {
+			return i
+		}
+	}
+	return -1
+}
+
+// trimTrailingNils removes nil slots from the tail of the slice.
+func (m *Manager) trimTrailingNils() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for len(m.slots) > 0 && m.slots[len(m.slots)-1] == nil {
+		m.slots = m.slots[:len(m.slots)-1]
+	}
+}
+
+// usedNodeIDs returns the set of node IDs currently served by healthy slots.
+func (m *Manager) usedNodeIDs() map[string]struct{} {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	used := make(map[string]struct{})
+	for _, s := range m.slots {
+		if s != nil && s.Managed != nil && s.Managed.Running() {
+			used[s.NodeID] = struct{}{}
+		}
+	}
+	return used
 }
 
 // deviceIP returns the first non-loopback IPv4 address assigned to a TUN device,
