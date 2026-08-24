@@ -54,9 +54,11 @@ type Manager struct {
 	discovery *services.DiscoveryService
 	tunnel    *tunnel.Manager
 
-	mu     sync.Mutex
-	slots  []*Slot
-	stopCh chan struct{}
+	mu         sync.Mutex
+	slots      []*Slot
+	stopCh     chan struct{}
+	reconMu    sync.Mutex
+	reconciling bool
 }
 
 // NewManager constructs a pool Manager.
@@ -119,6 +121,12 @@ func (m *Manager) loop(ctx context.Context) {
 // reconcile rebuilds the slot set only when the candidate set changes or a
 // running slot has died, so healthy slots are not disturbed on every tick.
 func (m *Manager) reconcile(ctx context.Context) {
+	if !m.reconMu.TryLock() {
+		slog.Warn("pool reconcile already in progress; skipping tick", "module", "pool")
+		return
+	}
+	defer m.reconMu.Unlock()
+
 	candidates, err := m.candidateNodes(ctx)
 	if err != nil {
 		slog.Warn("pool candidate fetch failed", "module", "pool", "err", err)
@@ -176,7 +184,10 @@ func (m *Manager) candidateNodes(ctx context.Context) ([]domain.ProxyNodeRead, e
 // build tears nothing down; it starts a tunnel + SOCKS5 listener per candidate
 // and assigns contiguous ports from PoolStartPort.
 func (m *Manager) build(ctx context.Context, candidates []domain.ProxyNodeRead) {
-	slots := make([]*Slot, 0, len(candidates))
+	m.mu.Lock()
+	m.slots = make([]*Slot, 0, len(candidates))
+	m.mu.Unlock()
+
 	for i, node := range candidates {
 		port := m.cfg.PoolStartPort + i
 		device := fmt.Sprintf("%s%d", m.cfg.ProbeDevicePrefix, m.cfg.PoolDeviceBase+i)
@@ -217,7 +228,7 @@ func (m *Manager) build(ctx context.Context, candidates []domain.ProxyNodeRead) 
 			_ = m.nodes.MarkUnavailable(ctx, node.ID)
 			continue
 		}
-		slots = append(slots, &Slot{
+		slot := &Slot{
 			Index:     i,
 			Port:      port,
 			Device:    device,
@@ -226,13 +237,15 @@ func (m *Manager) build(ctx context.Context, candidates []domain.ProxyNodeRead) 
 			Managed:   managed,
 			Gateway:   gw,
 			StartedAt: time.Now(),
-		})
+		}
+		m.mu.Lock()
+		m.slots = append(m.slots, slot)
+		live := len(m.slots)
+		m.mu.Unlock()
 		slog.Info("pool slot up", "module", "pool",
-			"port", port, "device", device, "node", node.ID, "country", node.Country)
+			"port", port, "device", device, "node", node.ID, "country", node.Country,
+			"live_slots", live)
 	}
-	m.mu.Lock()
-	m.slots = slots
-	m.mu.Unlock()
 }
 
 func (m *Manager) teardownAll() {

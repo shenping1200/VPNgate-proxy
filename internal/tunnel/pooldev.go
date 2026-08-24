@@ -51,6 +51,11 @@ func sanitizePoolConfig(text string) string {
 	if !hasCipher {
 		out = append(out, "cipher AES-256-CBC")
 	}
+	// OpenVPN 2.4.x treats server-pushed redirect-gateway / dhcp-option as fatal
+	// errors when they appear in [PUSH-OPTIONS]. Drop them on the client side so
+	// the tunnel still comes up; egress is handled per-slot via SO_BINDTODEVICE.
+	out = append(out, "pull-filter ignore \"redirect-gateway\"")
+	out = append(out, "pull-filter ignore \"dhcp-option\"")
 	return strings.Join(out, "\n")
 }
 
