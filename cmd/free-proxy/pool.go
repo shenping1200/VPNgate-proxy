@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -61,6 +62,7 @@ func poolCmd() *cobra.Command {
 			}
 
 			mgr := pool.NewManager(cfg, repos.Nodes, discovery, tunnelMgr)
+			slog.Info("pool cfg check", "proxy_username", cfg.ProxyUsername, "proxy_password_set", cfg.ProxyPassword != "")
 
 			// Start the management web panel BEFORE the (blocking) pool
 			// reconcile so the dashboard is reachable immediately and shows
