@@ -1,8 +1,11 @@
 // Package pool implements the multi-port VPNGate proxy pool: every usable VPN
 // node is turned into one independent SOCKS5 port on the host. A client reaches
-// a specific exit simply by connecting to VPS_IP:PORT — port N always maps to
-// the Nth node in the current candidate set, and when a node dies the slots
-// below it shift up so the port range stays contiguous (dynamic mode).
+// a specific exit simply by connecting to VPS_IP:PORT. Ports are assigned by the
+// number of slots that are successfully up, so a single dead node never leaves a
+// gap in the contiguous block: if the first candidate fails, the next working
+// node simply fills START_PORT, the next fills START_PORT+1, and so on. Each
+// port also retries the next candidate node (up to FREE_PROXY_POOL_BUILD_RETRIES
+// extra attempts) before being considered unavailable.
 package pool
 
 import (
@@ -182,83 +185,134 @@ func (m *Manager) candidateNodes(ctx context.Context) ([]domain.ProxyNodeRead, e
 	return out, nil
 }
 
-// build tears nothing down; it starts a tunnel + SOCKS5 listener per candidate
-// and assigns contiguous ports from PoolStartPort.
+// build starts one tunnel + SOCKS5 listener per SOCKS5 port. Ports are assigned
+// by the count of successfully-up slots (port = PoolStartPort + liveCount), so a
+// failed node leaves no gap: the next working candidate simply fills the next
+// contiguous port. Each port tries the next candidate node up to
+// PoolBuildRetries extra times before giving up.
 func (m *Manager) build(ctx context.Context, candidates []domain.ProxyNodeRead) {
 	m.mu.Lock()
 	m.slots = make([]*Slot, 0, len(candidates))
 	m.mu.Unlock()
 
-	for i, node := range candidates {
-		port := m.cfg.PoolStartPort + i
-		device := fmt.Sprintf("%s%d", m.cfg.ProbeDevicePrefix, m.cfg.PoolDeviceBase+i)
-		target, err := m.nodes.GetTarget(ctx, node.ID)
-		if err != nil {
-			slog.Warn("pool get target failed; skipping node", "module", "pool", "node", node.ID, "err", err)
+	extra := m.cfg.PoolBuildRetries
+	if extra < 0 {
+		extra = 0
+	}
+
+	cursor := 0 // index into candidates; advances only when a node is consumed
+	for cursor < len(candidates) {
+		// Already have enough slots to fill the max port budget.
+		m.mu.Lock()
+		if len(m.slots) >= m.cfg.PoolMaxPorts {
+			m.mu.Unlock()
+			break
+		}
+		m.mu.Unlock()
+
+		// Try the current candidate plus up to `extra` fallbacks for THIS port.
+		var slot *Slot
+		triedIDs := make([]string, 0, extra+1)
+		for attempt := 0; attempt <= extra && cursor < len(candidates); attempt, cursor = attempt+1, cursor+1 {
+			node := candidates[cursor]
+			triedIDs = append(triedIDs, node.ID)
+			s := m.tryStartSlot(ctx, node)
+			if s != nil {
+				slot = s
+				break
+			}
+		}
+
+		if slot == nil {
+			// Every candidate we tried for this port failed; mark them all
+			// unavailable so discovery can cool them down, then move on. The port
+			// stays unfilled (no gap is created because we never advance a port
+			// without a live slot).
+			for _, id := range triedIDs {
+				_ = m.nodes.MarkUnavailable(ctx, id)
+			}
+			slog.Warn("pool port unfilled after retries", "module", "pool",
+				"tried", triedIDs, "retries", extra)
 			continue
 		}
-		res, managed := m.tunnel.StartDevice(ctx, node.ID, target.ConfigText, device)
-		if !res.Success || managed == nil {
-			slog.Warn("pool tunnel failed; marking node unavailable", "module", "pool",
-				"node", node.ID, "device", device, "msg", res.Message)
-			_ = m.nodes.MarkUnavailable(ctx, node.ID)
-			continue
-		}
-		connector := proxy.NewSocketConnector(device, m.cfg.ProxyDNSServer, m.cfg.ProxyConnectTimeout())
-		// Read proxy credentials directly from the environment. The env-library
-		// prefix parsing occasionally fails to populate ProxyPassword, so we
-		// resolve them here unconditionally to guarantee auth is configured.
-		proxyUser := m.cfg.ProxyUsername
-		if proxyUser == "" {
-			proxyUser = os.Getenv("FREE_PROXY_PROXY_USERNAME")
-		}
-		proxyPass := m.cfg.ProxyPassword
-		if proxyPass == "" {
-			proxyPass = os.Getenv("FREE_PROXY_PROXY_PASSWORD")
-		}
-		gw := proxy.New(proxy.Options{
-			Host:            "0.0.0.0",
-			Port:            port,
-			MaxConnections: m.cfg.ProxyMaxConnections,
-			ConnectTimeout:  m.cfg.ProxyConnectTimeout(),
-			IdleTimeout:     m.cfg.ProxyIdleTimeout(),
-			Username:        proxyUser,
-			Password:        proxyPass,
-			AuthRequired: func() bool {
-				return proxyUser != "" && proxyPass != ""
-			},
-			Authenticate: func(username, password string) bool {
-				return username == proxyUser && password == proxyPass
-			},
-			// Pool ports are meant to be reached from outside, but only behind
-			// proxy auth — never as an open relay.
-			ExternalAllowed: func() bool {
-				return proxyUser != "" && proxyPass != ""
-			},
-		}, connector)
-		if err := gw.Start(ctx); err != nil {
-			slog.Warn("pool gateway start failed; stopping tunnel", "module", "pool", "port", port, "err", err)
-			managed.Stop()
-			_ = m.nodes.MarkUnavailable(ctx, node.ID)
-			continue
-		}
-		slot := &Slot{
-			Index:     i,
-			Port:      port,
-			Device:    device,
-			NodeID:    node.ID,
-			Country:   node.Country,
-			Managed:   managed,
-			Gateway:   gw,
-			StartedAt: time.Now(),
-		}
+
 		m.mu.Lock()
 		m.slots = append(m.slots, slot)
 		live := len(m.slots)
 		m.mu.Unlock()
 		slog.Info("pool slot up", "module", "pool",
-			"port", port, "device", device, "node", node.ID, "country", node.Country,
-			"live_slots", live)
+			"port", slot.Port, "device", slot.Device, "node", slot.NodeID,
+			"country", slot.Country, "live_slots", live)
+	}
+}
+
+// tryStartSlot attempts to bring up one tunnel + SOCKS5 gateway for node on the
+// next free contiguous port (PoolStartPort + current live count). It returns the
+// Slot on success, or nil (after cleaning up the half-built tunnel) on failure.
+func (m *Manager) tryStartSlot(ctx context.Context, node domain.ProxyNodeRead) *Slot {
+	m.mu.Lock()
+	portOffset := len(m.slots)
+	m.mu.Unlock()
+	port := m.cfg.PoolStartPort + portOffset
+	device := fmt.Sprintf("%s%d", m.cfg.ProbeDevicePrefix, m.cfg.PoolDeviceBase+portOffset)
+
+	target, err := m.nodes.GetTarget(ctx, node.ID)
+	if err != nil {
+		slog.Warn("pool get target failed; skipping node", "module", "pool", "node", node.ID, "err", err)
+		return nil
+	}
+	res, managed := m.tunnel.StartDevice(ctx, node.ID, target.ConfigText, device)
+	if !res.Success || managed == nil {
+		slog.Warn("pool tunnel failed", "module", "pool",
+			"node", node.ID, "device", device, "msg", res.Message)
+		return nil
+	}
+	connector := proxy.NewSocketConnector(device, m.cfg.ProxyDNSServer, m.cfg.ProxyConnectTimeout())
+	// Read proxy credentials directly from the environment. The env-library
+	// prefix parsing occasionally fails to populate ProxyPassword, so we
+	// resolve them here unconditionally to guarantee auth is configured.
+	proxyUser := m.cfg.ProxyUsername
+	if proxyUser == "" {
+		proxyUser = os.Getenv("FREE_PROXY_PROXY_USERNAME")
+	}
+	proxyPass := m.cfg.ProxyPassword
+	if proxyPass == "" {
+		proxyPass = os.Getenv("FREE_PROXY_PROXY_PASSWORD")
+	}
+	gw := proxy.New(proxy.Options{
+		Host:            "0.0.0.0",
+		Port:            port,
+		MaxConnections: m.cfg.ProxyMaxConnections,
+		ConnectTimeout:  m.cfg.ProxyConnectTimeout(),
+		IdleTimeout:     m.cfg.ProxyIdleTimeout(),
+		Username:        proxyUser,
+		Password:        proxyPass,
+		AuthRequired: func() bool {
+			return proxyUser != "" && proxyPass != ""
+		},
+		Authenticate: func(username, password string) bool {
+			return username == proxyUser && password == proxyPass
+		},
+		// Pool ports are meant to be reached from outside, but only behind
+		// proxy auth — never as an open relay.
+		ExternalAllowed: func() bool {
+			return proxyUser != "" && proxyPass != ""
+		},
+	}, connector)
+	if err := gw.Start(ctx); err != nil {
+		slog.Warn("pool gateway start failed; stopping tunnel", "module", "pool", "port", port, "err", err)
+		managed.Stop()
+		return nil
+	}
+	return &Slot{
+		Index:     portOffset,
+		Port:      port,
+		Device:    device,
+		NodeID:    node.ID,
+		Country:   node.Country,
+		Managed:   managed,
+		Gateway:   gw,
+		StartedAt: time.Now(),
 	}
 }
 

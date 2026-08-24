@@ -98,7 +98,11 @@ type Config struct {
 	PoolMode                   string `env:"POOL_MODE" envDefault:"dynamic"`
 	PoolFixedStartPort         int    `env:"POOL_FIXED_START_PORT" envDefault:"50001"`
 	PoolDiscoveryIntervalSecs  int    `env:"POOL_DISCOVERY_INTERVAL_SECONDS" envDefault:"300"`
-	PoolReconcileIntervalSecs  int    `env:"POOL_RECONCILE_INTERVAL_SECONDS" envDefault:"60"`
+	PoolReconcileIntervalSecs  int    `env:"POOL_RECONCILE_INTERVAL_SECONDS" envDefault:"300"`
+	// PoolBuildRetries is how many additional candidate nodes to try (beyond the
+	// first) for each SOCKS5 port, so a single dead node no longer leaves a hole
+	// in the otherwise-contiguous port block. 0 means no extra retries.
+	PoolBuildRetries           int    `env:"POOL_BUILD_RETRIES" envDefault:"3"`
 	// Pool web management panel (served by `pool` mode). Falls back to the proxy
 	// credentials when POOL_WEB_PASSWORD is empty, so a single secret governs both.
 	PoolWebEnabled  bool   `env:"POOL_WEB_ENABLED" envDefault:"true"`
