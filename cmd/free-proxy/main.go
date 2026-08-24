@@ -60,5 +60,17 @@ func versionCmd() *cobra.Command {
 
 // loadConfig is the shared config entry for every subcommand.
 func loadConfig() (*config.Config, error) {
-	return config.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, err
+	}
+	// Env-library prefix parsing occasionally misses these two fields; fall
+	// back to the raw process environment so proxy auth is always configured.
+	if cfg.ProxyUsername == "" {
+		cfg.ProxyUsername = os.Getenv("FREE_PROXY_PROXY_USERNAME")
+	}
+	if cfg.ProxyPassword == "" {
+		cfg.ProxyPassword = os.Getenv("FREE_PROXY_PROXY_PASSWORD")
+	}
+	return cfg, nil
 }
