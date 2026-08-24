@@ -3,6 +3,7 @@ package proxy
 import (
 	"bufio"
 	"context"
+	"log/slog"
 	"net"
 	"time"
 )
