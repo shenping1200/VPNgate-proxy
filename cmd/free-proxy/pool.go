@@ -61,11 +61,11 @@ func poolCmd() *cobra.Command {
 			}
 
 			mgr := pool.NewManager(cfg, repos.Nodes, discovery, tunnelMgr)
-			if err := mgr.Start(ctx); err != nil {
-				return err
-			}
-			fmt.Printf("proxy pool active: %d ports from %d\n", mgr.Size(), cfg.PoolStartPort)
 
+			// Start the management web panel BEFORE the (blocking) pool
+			// reconcile so the dashboard is reachable immediately and shows
+			// slots filling in live, instead of waiting on the first
+			// reconcile (which can take tens of seconds for many tunnels).
 			if cfg.PoolWebEnabled {
 				go func() {
 					if err := poolui.Start(ctx, cfg, mgr, version); err != nil {
@@ -73,6 +73,11 @@ func poolCmd() *cobra.Command {
 					}
 				}()
 			}
+
+			if err := mgr.Start(ctx); err != nil {
+				return err
+			}
+			fmt.Printf("proxy pool active: %d ports from %d\n", mgr.Size(), cfg.PoolStartPort)
 
 			<-ctx.Done()
 			mgr.Stop()
