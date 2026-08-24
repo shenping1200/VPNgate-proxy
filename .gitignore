@@ -1,0 +1,67 @@
+# ============================================
+#  Free Proxy .gitignore
+# ============================================
+
+# ---- Debian 打包产物 ----
+*.deb
+
+
+# ---- 运行时数据 ----
+free_proxy_data/
+logs/
+*.log
+*.tmp
+*.pid
+
+# ---- IDE 和编辑器 ----
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# ---- AI 编码助手 ----
+.gemini/
+.cursor/
+.cursorrules
+.aider*
+.codeium/
+.continue/
+.copilot/
+
+# ---- 本地开发文档（不上传 GitHub） ----
+AI开发指令.md
+功能文档.md
+
+# ---- 参考实现（对照用，独立仓库，不纳入本仓库） ----
+aimili-vpngate/
+
+# ---- 临时和测试文件 ----
+scratch/
+*连接配置*
+*.bak
+*.orig
+
+# ---- 系统文件 ----
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ---- 前端产物以及依赖 ----
+*/node_modules/
+frontend/dist/
+frontend/.vite/
+*.tsbuildinfo
+
+# ---- Go 构建产物 ----
+/dist/
+# 只忽略根目录编译出的二进制；不要误伤 cmd/free-proxy/ 源码目录
+/free-proxy
+*.test
+*.out
+# 嵌入前端产物目录（构建时生成），但保留占位 index.html 供裸 go build
+internal/web/dist/*
+!internal/web/dist/index.html
