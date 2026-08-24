@@ -72,6 +72,8 @@ curl -x socks5://youruser:yourpass@VPS_IP:45678 https://api.ipify.org
 
 > 注意：代理池模式与 `serve`（单出口网页后台）是两个独立子命令，按需选用。
 
+**重要安全说明**：池模式下的每条隧道在写入配置时会**剥离 `redirect-gateway`/`redirect-private`** 指令（`.ovpn` 文件自带，而 `--route-nopull` 只挡服务端推送、挡不住文件内指令）。因此各隧道**不会接管 VPS 的默认路由**，主机自身出网不受影响，代理流量完全靠 `SO_BINDTODEVICE` 按 `fpx` 接口分流。若你确实需要某条隧道做全机默认出口，请改用 `serve` 模式。
+
 ---
 
 ## 开始之前
