@@ -62,7 +62,7 @@ func poolCmd() *cobra.Command {
 			}
 
 			mgr := pool.NewManager(cfg, repos.Nodes, discovery, tunnelMgr)
-			slog.Info("pool cfg check", "proxy_username", cfg.ProxyUsername, "proxy_password_set", cfg.ProxyPassword != "")
+			slog.Info("pool cfg check", "proxy_username", cfg.ProxyUsername, "proxy_password_set", cfg.ProxyPassword != "", "env_user", os.Getenv("FREE_PROXY_PROXY_USERNAME") != "", "env_pass", os.Getenv("FREE_PROXY_PROXY_PASSWORD") != "")
 
 			// Start the management web panel BEFORE the (blocking) pool
 			// reconcile so the dashboard is reachable immediately and shows

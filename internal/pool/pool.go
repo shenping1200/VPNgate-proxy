@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"os"
 	"sort"
 	"sync"
 	"time"
@@ -204,22 +205,35 @@ func (m *Manager) build(ctx context.Context, candidates []domain.ProxyNodeRead) 
 			continue
 		}
 		connector := proxy.NewSocketConnector(device, m.cfg.ProxyDNSServer, m.cfg.ProxyConnectTimeout())
+		// Read proxy credentials directly from the environment. The env-library
+		// prefix parsing occasionally fails to populate ProxyPassword, so we
+		// resolve them here unconditionally to guarantee auth is configured.
+		proxyUser := m.cfg.ProxyUsername
+		if proxyUser == "" {
+			proxyUser = os.Getenv("FREE_PROXY_PROXY_USERNAME")
+		}
+		proxyPass := m.cfg.ProxyPassword
+		if proxyPass == "" {
+			proxyPass = os.Getenv("FREE_PROXY_PROXY_PASSWORD")
+		}
 		gw := proxy.New(proxy.Options{
 			Host:            "0.0.0.0",
 			Port:            port,
 			MaxConnections: m.cfg.ProxyMaxConnections,
 			ConnectTimeout:  m.cfg.ProxyConnectTimeout(),
 			IdleTimeout:     m.cfg.ProxyIdleTimeout(),
+			Username:        proxyUser,
+			Password:        proxyPass,
 			AuthRequired: func() bool {
-				return m.cfg.ProxyUsername != "" && m.cfg.ProxyPassword != ""
+				return proxyUser != "" && proxyPass != ""
 			},
 			Authenticate: func(username, password string) bool {
-				return username == m.cfg.ProxyUsername && password == m.cfg.ProxyPassword
+				return username == proxyUser && password == proxyPass
 			},
 			// Pool ports are meant to be reached from outside, but only behind
 			// proxy auth — never as an open relay.
 			ExternalAllowed: func() bool {
-				return m.cfg.ProxyUsername != "" && m.cfg.ProxyPassword != ""
+				return proxyUser != "" && proxyPass != ""
 			},
 		}, connector)
 		if err := gw.Start(ctx); err != nil {
