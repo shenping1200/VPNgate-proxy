@@ -8,6 +8,7 @@ import (
 
 	"github.com/shenping1200/VPNgate-proxy/internal/logging"
 	"github.com/shenping1200/VPNgate-proxy/internal/pool"
+	"github.com/shenping1200/VPNgate-proxy/internal/poolui"
 	"github.com/shenping1200/VPNgate-proxy/internal/providers/vpngate"
 	"github.com/shenping1200/VPNgate-proxy/internal/services"
 	"github.com/shenping1200/VPNgate-proxy/internal/tunnel"
@@ -64,6 +65,14 @@ func poolCmd() *cobra.Command {
 				return err
 			}
 			fmt.Printf("proxy pool active: %d ports from %d\n", mgr.Size(), cfg.PoolStartPort)
+
+			if cfg.PoolWebEnabled {
+				go func() {
+					if err := poolui.Start(ctx, cfg, mgr, version); err != nil {
+						fmt.Fprintf(os.Stderr, "pool web panel error: %v\n", err)
+					}
+				}()
+			}
 
 			<-ctx.Done()
 			mgr.Stop()

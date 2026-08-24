@@ -99,6 +99,13 @@ type Config struct {
 	PoolFixedStartPort         int    `env:"POOL_FIXED_START_PORT" envDefault:"50001"`
 	PoolDiscoveryIntervalSecs  int    `env:"POOL_DISCOVERY_INTERVAL_SECONDS" envDefault:"300"`
 	PoolReconcileIntervalSecs  int    `env:"POOL_RECONCILE_INTERVAL_SECONDS" envDefault:"60"`
+	// Pool web management panel (served by `pool` mode). Falls back to the proxy
+	// credentials when POOL_WEB_PASSWORD is empty, so a single secret governs both.
+	PoolWebEnabled  bool   `env:"POOL_WEB_ENABLED" envDefault:"true"`
+	PoolWebHost     string `env:"POOL_WEB_HOST" envDefault:"0.0.0.0"`
+	PoolWebPort     int    `env:"POOL_WEB_PORT" envDefault:"39527"`
+	PoolWebUsername string `env:"POOL_WEB_USERNAME" envDefault:"admin"`
+	PoolWebPassword string `env:"POOL_WEB_PASSWORD" envDefault:""`
 }
 
 // Load parses the environment into a Config, applies derived defaults, and

@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"sort"
 	"sync"
 	"time"
@@ -35,11 +36,13 @@ type Slot struct {
 
 // SlotView is the safe, serialisable view of a Slot for API/CLI output.
 type SlotView struct {
-	Port    int    `json:"port"`
-	Device  string `json:"device"`
-	NodeID  string `json:"node_id"`
-	Country string `json:"country"`
-	Running bool   `json:"running"`
+	Port       int    `json:"port"`
+	Device     string `json:"device"`
+	NodeID     string `json:"node_id"`
+	Country    string `json:"country"`
+	ExitIP     string `json:"exit_ip"`
+	Running    bool   `json:"running"`
+	UptimeSecs int64  `json:"uptime_secs"`
 }
 
 // Manager drives the pool: it periodically discovers nodes, then maps the
@@ -253,12 +256,18 @@ func (m *Manager) Slots() []SlotView {
 	defer m.mu.Unlock()
 	out := make([]SlotView, 0, len(m.slots))
 	for _, s := range m.slots {
+		uptime := int64(0)
+		if !s.StartedAt.IsZero() {
+			uptime = int64(time.Since(s.StartedAt).Seconds())
+		}
 		out = append(out, SlotView{
-			Port:    s.Port,
-			Device:  s.Device,
-			NodeID:  s.NodeID,
-			Country: s.Country,
-			Running: s.Managed != nil && s.Managed.Running(),
+			Port:       s.Port,
+			Device:     s.Device,
+			NodeID:     s.NodeID,
+			Country:    s.Country,
+			ExitIP:     deviceIP(s.Device),
+			Running:    s.Managed != nil && s.Managed.Running(),
+			UptimeSecs: uptime,
 		})
 	}
 	return out
@@ -269,4 +278,42 @@ func (m *Manager) Size() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return len(m.slots)
+}
+
+// ReconcileNow forces an immediate rebalance of the pool. It tears down every
+// slot and rebuilds from the current candidate set (same path as the periodic
+// reconcile). Use it after node availability changes without waiting for the
+// next tick.
+func (m *Manager) ReconcileNow(ctx context.Context) {
+	slog.Info("pool manual reconcile requested", "module", "pool")
+	m.reconcile(ctx)
+}
+
+// deviceIP returns the first non-loopback IPv4 address assigned to a TUN device,
+// used to surface the egress IP a slot's traffic exits through.
+func deviceIP(name string) string {
+	iface, err := net.InterfaceByName(name)
+	if err != nil {
+		return ""
+	}
+	addrs, err := iface.Addrs()
+	if err != nil {
+		return ""
+	}
+	for _, a := range addrs {
+		var ip net.IP
+		switch v := a.(type) {
+		case *net.IPNet:
+			ip = v.IP
+		case *net.IPAddr:
+			ip = v.IP
+		}
+		if ip == nil || ip.IsLoopback() {
+			continue
+		}
+		if v4 := ip.To4(); v4 != nil {
+			return v4.String()
+		}
+	}
+	return ""
 }
