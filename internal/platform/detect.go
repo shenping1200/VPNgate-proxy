@@ -13,8 +13,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/masteralanlab/free-proxy/internal/naming"
-	"github.com/masteralanlab/free-proxy/internal/netx"
+	"github.com/shenping1200/VPNgate-proxy/internal/naming"
+	"github.com/shenping1200/VPNgate-proxy/internal/netx"
 )
 
 // Check is the result of a single dependency probe.

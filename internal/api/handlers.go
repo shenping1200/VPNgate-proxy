@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v5"
-	"github.com/masteralanlab/free-proxy/internal/domain"
-	"github.com/masteralanlab/free-proxy/internal/security"
-	"github.com/masteralanlab/free-proxy/internal/store"
+	"github.com/shenping1200/VPNgate-proxy/internal/domain"
+	"github.com/shenping1200/VPNgate-proxy/internal/security"
+	"github.com/shenping1200/VPNgate-proxy/internal/store"
 )
 
 // Handlers implements the REST endpoints over the service layer.

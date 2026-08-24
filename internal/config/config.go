@@ -14,7 +14,7 @@ import (
 
 	"github.com/caarlos0/env/v11"
 
-	"github.com/masteralanlab/free-proxy/internal/naming"
+	"github.com/shenping1200/VPNgate-proxy/internal/naming"
 )
 
 // Config holds all runtime settings. Field env tags omit the FREE_PROXY_

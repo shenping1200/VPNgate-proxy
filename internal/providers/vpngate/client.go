@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/masteralanlab/free-proxy/internal/config"
-	"github.com/masteralanlab/free-proxy/internal/domain"
+	"github.com/shenping1200/VPNgate-proxy/internal/config"
+	"github.com/shenping1200/VPNgate-proxy/internal/domain"
 )
 
 // Provider fetches and parses nodes from VPNGate with a direct TLS/HTTP fallback chain.

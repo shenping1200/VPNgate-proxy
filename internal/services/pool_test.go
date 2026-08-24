@@ -3,7 +3,7 @@ package services
 import (
 	"testing"
 
-	"github.com/masteralanlab/free-proxy/internal/domain"
+	"github.com/shenping1200/VPNgate-proxy/internal/domain"
 )
 
 func node(id string, latency, score int, ip domain.IpType, country string) domain.ProxyNodeRead {

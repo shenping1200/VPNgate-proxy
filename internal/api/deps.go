@@ -3,11 +3,11 @@
 package api
 
 import (
-	"github.com/masteralanlab/free-proxy/internal/config"
-	"github.com/masteralanlab/free-proxy/internal/logging"
-	"github.com/masteralanlab/free-proxy/internal/security"
-	"github.com/masteralanlab/free-proxy/internal/services"
-	"github.com/masteralanlab/free-proxy/internal/store"
+	"github.com/shenping1200/VPNgate-proxy/internal/config"
+	"github.com/shenping1200/VPNgate-proxy/internal/logging"
+	"github.com/shenping1200/VPNgate-proxy/internal/security"
+	"github.com/shenping1200/VPNgate-proxy/internal/services"
+	"github.com/shenping1200/VPNgate-proxy/internal/store"
 )
 
 // Deps is the explicitly-wired dependency container (replaces app.state).

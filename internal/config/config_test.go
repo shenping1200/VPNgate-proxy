@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/masteralanlab/free-proxy/internal/naming"
+	"github.com/shenping1200/VPNgate-proxy/internal/naming"
 )
 
 func loadWith(t *testing.T, env map[string]string) (*Config, error) {

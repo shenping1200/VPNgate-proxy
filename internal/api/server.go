@@ -8,7 +8,7 @@ import (
 
 	"github.com/go-playground/validator/v10"
 	"github.com/labstack/echo/v5"
-	"github.com/masteralanlab/free-proxy/internal/domain"
+	"github.com/shenping1200/VPNgate-proxy/internal/domain"
 )
 
 type structValidator struct{ v *validator.Validate }

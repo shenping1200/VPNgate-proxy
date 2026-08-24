@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/masteralanlab/free-proxy/internal/naming"
+	"github.com/shenping1200/VPNgate-proxy/internal/naming"
 )
 
 // AdvertiseAddress is the host chosen for a URL we print for a human to copy.

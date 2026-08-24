@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/masteralanlab/free-proxy/internal/domain"
-	"github.com/masteralanlab/free-proxy/internal/store/gen"
+	"github.com/shenping1200/VPNgate-proxy/internal/domain"
+	"github.com/shenping1200/VPNgate-proxy/internal/store/gen"
 )
 
 // ResolveAlias maps a possibly-stale node id to its canonical id.

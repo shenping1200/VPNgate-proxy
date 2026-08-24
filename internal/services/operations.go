@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/masteralanlab/free-proxy/internal/domain"
+	"github.com/shenping1200/VPNgate-proxy/internal/domain"
 )
 
 type opTokenKey struct{}

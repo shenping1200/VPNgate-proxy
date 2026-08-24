@@ -7,8 +7,8 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/masteralanlab/free-proxy/internal/domain"
-	"github.com/masteralanlab/free-proxy/internal/store"
+	"github.com/shenping1200/VPNgate-proxy/internal/domain"
+	"github.com/shenping1200/VPNgate-proxy/internal/store"
 )
 
 // JobFunc is the body of an async job; its returned map becomes the job result.

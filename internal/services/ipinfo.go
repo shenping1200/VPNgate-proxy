@@ -5,10 +5,10 @@ import (
 	"errors"
 	"time"
 
-	"github.com/masteralanlab/free-proxy/internal/config"
-	"github.com/masteralanlab/free-proxy/internal/domain"
-	"github.com/masteralanlab/free-proxy/internal/ipinfo"
-	"github.com/masteralanlab/free-proxy/internal/store"
+	"github.com/shenping1200/VPNgate-proxy/internal/config"
+	"github.com/shenping1200/VPNgate-proxy/internal/domain"
+	"github.com/shenping1200/VPNgate-proxy/internal/ipinfo"
+	"github.com/shenping1200/VPNgate-proxy/internal/store"
 )
 
 // IpInfoService enriches nodes with IP classification, using the cache first.

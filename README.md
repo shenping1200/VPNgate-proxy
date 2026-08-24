@@ -228,7 +228,7 @@ free-proxy uninstall     # 卸载(加 --purge-data 连数据一起删除)
 ### 手动安装(不走脚本)
 
 ```bash
-curl -fL https://github.com/masteralanlab/free-proxy/releases/latest/download/free-proxy-linux-amd64 -o free-proxy
+curl -fL https://github.com/shenping1200/VPNgate-proxy/releases/latest/download/free-proxy-linux-amd64 -o free-proxy
 chmod +x free-proxy && sudo ./free-proxy install
 ```
 

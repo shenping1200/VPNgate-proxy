@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/masteralanlab/free-proxy/internal/naming"
+	"github.com/shenping1200/VPNgate-proxy/internal/naming"
 )
 
 func writeEnv(t *testing.T, content string) string {

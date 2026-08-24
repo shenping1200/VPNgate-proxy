@@ -14,14 +14,14 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/masteralanlab/free-proxy/internal/config"
-	"github.com/masteralanlab/free-proxy/internal/naming"
-	"github.com/masteralanlab/free-proxy/internal/netx"
-	"github.com/masteralanlab/free-proxy/internal/platform"
-	"github.com/masteralanlab/free-proxy/internal/providers/vpngate"
-	"github.com/masteralanlab/free-proxy/internal/security"
-	"github.com/masteralanlab/free-proxy/internal/services"
-	"github.com/masteralanlab/free-proxy/internal/store"
+	"github.com/shenping1200/VPNgate-proxy/internal/config"
+	"github.com/shenping1200/VPNgate-proxy/internal/naming"
+	"github.com/shenping1200/VPNgate-proxy/internal/netx"
+	"github.com/shenping1200/VPNgate-proxy/internal/platform"
+	"github.com/shenping1200/VPNgate-proxy/internal/providers/vpngate"
+	"github.com/shenping1200/VPNgate-proxy/internal/security"
+	"github.com/shenping1200/VPNgate-proxy/internal/services"
+	"github.com/shenping1200/VPNgate-proxy/internal/store"
 	"github.com/spf13/cobra"
 )
 

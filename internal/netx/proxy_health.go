@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/masteralanlab/free-proxy/internal/domain"
+	"github.com/shenping1200/VPNgate-proxy/internal/domain"
 )
 
 // HealthChecker verifies the local SOCKS5 proxy reaches the internet and reports

@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/labstack/echo/v5"
-	"github.com/masteralanlab/free-proxy/internal/security"
+	"github.com/shenping1200/VPNgate-proxy/internal/security"
 )
 
 // ExternalAccessGuard blocks non-loopback clients from the web admin when the

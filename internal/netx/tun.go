@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/masteralanlab/free-proxy/internal/naming"
+	"github.com/shenping1200/VPNgate-proxy/internal/naming"
 )
 
 // TunAllocator hands out exclusive tunnel device names from a private,

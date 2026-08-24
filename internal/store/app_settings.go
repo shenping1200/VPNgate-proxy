@@ -5,8 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/masteralanlab/free-proxy/internal/config"
-	"github.com/masteralanlab/free-proxy/internal/domain"
+	"github.com/shenping1200/VPNgate-proxy/internal/config"
+	"github.com/shenping1200/VPNgate-proxy/internal/domain"
 )
 
 // AppSettingsRepository persists all settings that can be managed from the web

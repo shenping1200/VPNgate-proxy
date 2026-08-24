@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/masteralanlab/free-proxy/internal/domain"
+	"github.com/shenping1200/VPNgate-proxy/internal/domain"
 )
 
 const readyMarker = "initialization sequence completed"

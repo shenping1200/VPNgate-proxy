@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/masteralanlab/free-proxy/internal/domain"
-	"github.com/masteralanlab/free-proxy/internal/store"
+	"github.com/shenping1200/VPNgate-proxy/internal/domain"
+	"github.com/shenping1200/VPNgate-proxy/internal/store"
 )
 
 // discTCP builds a TCP node, the only kind the sweep dials.

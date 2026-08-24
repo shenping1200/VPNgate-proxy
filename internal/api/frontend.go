@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/labstack/echo/v5"
-	"github.com/masteralanlab/free-proxy/internal/web"
+	"github.com/shenping1200/VPNgate-proxy/internal/web"
 )
 
 // registerFrontend serves the embedded React build, falling back to index.html

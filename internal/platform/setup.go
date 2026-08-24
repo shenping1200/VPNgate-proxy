@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/masteralanlab/free-proxy/internal/naming"
+	"github.com/shenping1200/VPNgate-proxy/internal/naming"
 )
 
 // System installation layout. The binary owns the whole install lifecycle

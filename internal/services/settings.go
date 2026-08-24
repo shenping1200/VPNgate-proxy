@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 
-	"github.com/masteralanlab/free-proxy/internal/domain"
-	"github.com/masteralanlab/free-proxy/internal/store"
+	"github.com/shenping1200/VPNgate-proxy/internal/domain"
+	"github.com/shenping1200/VPNgate-proxy/internal/store"
 )
 
 // SettingsService applies routing-settings changes and keeps the active exit

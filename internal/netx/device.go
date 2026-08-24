@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/masteralanlab/free-proxy/internal/naming"
+	"github.com/shenping1200/VPNgate-proxy/internal/naming"
 )
 
 // DeviceLister reports the interface names currently present on the host. The

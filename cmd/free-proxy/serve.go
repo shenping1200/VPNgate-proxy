@@ -10,17 +10,17 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/masteralanlab/free-proxy/internal/api"
-	"github.com/masteralanlab/free-proxy/internal/config"
-	"github.com/masteralanlab/free-proxy/internal/ipinfo"
-	"github.com/masteralanlab/free-proxy/internal/logging"
-	"github.com/masteralanlab/free-proxy/internal/netx"
-	"github.com/masteralanlab/free-proxy/internal/providers/vpngate"
-	"github.com/masteralanlab/free-proxy/internal/proxy"
-	"github.com/masteralanlab/free-proxy/internal/security"
-	"github.com/masteralanlab/free-proxy/internal/services"
-	"github.com/masteralanlab/free-proxy/internal/store"
-	"github.com/masteralanlab/free-proxy/internal/tunnel"
+	"github.com/shenping1200/VPNgate-proxy/internal/api"
+	"github.com/shenping1200/VPNgate-proxy/internal/config"
+	"github.com/shenping1200/VPNgate-proxy/internal/ipinfo"
+	"github.com/shenping1200/VPNgate-proxy/internal/logging"
+	"github.com/shenping1200/VPNgate-proxy/internal/netx"
+	"github.com/shenping1200/VPNgate-proxy/internal/providers/vpngate"
+	"github.com/shenping1200/VPNgate-proxy/internal/proxy"
+	"github.com/shenping1200/VPNgate-proxy/internal/security"
+	"github.com/shenping1200/VPNgate-proxy/internal/services"
+	"github.com/shenping1200/VPNgate-proxy/internal/store"
+	"github.com/shenping1200/VPNgate-proxy/internal/tunnel"
 )
 
 // buildDeps wires the entire application graph (the Go analogue of lifespan).

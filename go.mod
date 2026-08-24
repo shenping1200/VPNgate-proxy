@@ -1,4 +1,4 @@
-module github.com/masteralanlab/free-proxy
+module github.com/shenping1200/VPNgate-proxy
 
 go 1.26.4
 

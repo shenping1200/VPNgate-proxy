@@ -14,10 +14,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/masteralanlab/free-proxy/internal/config"
-	"github.com/masteralanlab/free-proxy/internal/domain"
-	"github.com/masteralanlab/free-proxy/internal/naming"
-	"github.com/masteralanlab/free-proxy/internal/netx"
+	"github.com/shenping1200/VPNgate-proxy/internal/config"
+	"github.com/shenping1200/VPNgate-proxy/internal/domain"
+	"github.com/shenping1200/VPNgate-proxy/internal/naming"
+	"github.com/shenping1200/VPNgate-proxy/internal/netx"
 )
 
 // DiagnosticsService runs system readiness checks and DNS repair.

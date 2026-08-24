@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/masteralanlab/free-proxy/internal/netx"
+	"github.com/shenping1200/VPNgate-proxy/internal/netx"
 	xproxy "golang.org/x/net/proxy"
 )
 

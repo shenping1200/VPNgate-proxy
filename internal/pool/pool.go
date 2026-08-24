@@ -13,12 +13,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/masteralanlab/free-proxy/internal/config"
-	"github.com/masteralanlab/free-proxy/internal/domain"
-	"github.com/masteralanlab/free-proxy/internal/proxy"
-	"github.com/masteralanlab/free-proxy/internal/services"
-	"github.com/masteralanlab/free-proxy/internal/store"
-	"github.com/masteralanlab/free-proxy/internal/tunnel"
+	"github.com/shenping1200/VPNgate-proxy/internal/config"
+	"github.com/shenping1200/VPNgate-proxy/internal/domain"
+	"github.com/shenping1200/VPNgate-proxy/internal/proxy"
+	"github.com/shenping1200/VPNgate-proxy/internal/services"
+	"github.com/shenping1200/VPNgate-proxy/internal/store"
+	"github.com/shenping1200/VPNgate-proxy/internal/tunnel"
 )
 
 // Slot is one SOCKS5 port bound to one VPN node via its own TUN device.

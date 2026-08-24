@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/masteralanlab/free-proxy/internal/config"
+	"github.com/shenping1200/VPNgate-proxy/internal/config"
 )
 
 func TestAppSettingsLegacyImportRunsOnce(t *testing.T) {

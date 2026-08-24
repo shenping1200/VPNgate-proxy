@@ -4,9 +4,9 @@ import (
 	"context"
 	"time"
 
-	"github.com/masteralanlab/free-proxy/internal/config"
-	"github.com/masteralanlab/free-proxy/internal/netx"
-	"github.com/masteralanlab/free-proxy/internal/store"
+	"github.com/shenping1200/VPNgate-proxy/internal/config"
+	"github.com/shenping1200/VPNgate-proxy/internal/netx"
+	"github.com/shenping1200/VPNgate-proxy/internal/store"
 )
 
 // ActiveLatencyMonitor periodically refreshes the active node's latency.
