@@ -6,7 +6,6 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/shenping1200/VPNgate-proxy/internal/config"
 	"github.com/shenping1200/VPNgate-proxy/internal/logging"
 	"github.com/shenping1200/VPNgate-proxy/internal/pool"
 	"github.com/shenping1200/VPNgate-proxy/internal/providers/vpngate"
