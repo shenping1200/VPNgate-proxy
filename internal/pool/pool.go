@@ -520,9 +520,27 @@ func (m *Manager) pickConnector(username string) (proxy.OutboundConnector, error
 		if idx, ok := m.rotateSessions[username]; ok && m.slotIndexHealthy(idx) {
 			return m.connectorForSlot(idx)
 		}
-		// Assign a healthy slot, spreading sessions across the pool.
-		pick := healthy[m.rotateRR%len(healthy)]
-		m.rotateRR++
+		// Assign a healthy slot, preferring one not already bound to another
+		// session so distinct sessions get distinct exit IPs (anti-detection).
+		// Falls back to pure round-robin only when every slot is already taken.
+		used := make(map[int]bool, len(m.rotateSessions))
+		for _, idx := range m.rotateSessions {
+			used[idx] = true
+		}
+		free := healthy[:0:0]
+		for _, idx := range healthy {
+			if !used[idx] {
+				free = append(free, idx)
+			}
+		}
+		var pick int
+		if len(free) > 0 {
+			pick = free[m.rotateRR%len(free)]
+			m.rotateRR++
+		} else {
+			pick = healthy[m.rotateRR%len(healthy)]
+			m.rotateRR++
+		}
 		m.rotateSessions[username] = pick
 		return m.connectorForSlot(pick)
 	}
