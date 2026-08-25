@@ -113,10 +113,13 @@ func (m *Manager) Start(ctx context.Context) error {
 	if err := m.loadProxyCredentials(); err != nil {
 		slog.Warn("pool load proxy credentials failed; using env defaults", "module", "pool", "err", err)
 	}
-	m.reconcile(ctx)
+	// Bring the rotating port up first so it is reachable immediately; it serves
+	// connections as soon as the first slots appear (pickConnector waits for a
+	// healthy pool), without blocking on the initial reconcile below.
 	if err := m.startRotateGateway(ctx); err != nil {
 		slog.Warn("pool rotate gateway failed to start", "module", "pool", "err", err)
 	}
+	m.reconcile(ctx)
 	go m.loop(ctx)
 	return nil
 }
