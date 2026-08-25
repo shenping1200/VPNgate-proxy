@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>VPNGate Proxy Pool</title>
+<title>VPNGate 代理池</title>
 <style>
   :root{
     --bg:#0f1419; --panel:#1a212b; --panel2:#222c38; --line:#2c3744;
@@ -18,7 +18,7 @@
   .wrap{padding:20px 22px;max-width:1200px;margin:0 auto}
   .cards{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px}
-  .card .k{color:var(--mut);font-size:12px;text-transform:uppercase;letter-spacing:.5px}
+  .card .k{color:var(--mut);font-size:12px;letter-spacing:.5px}
   .card .n{font-size:26px;font-weight:700;margin-top:6px}
   .card .n.ok{color:var(--ok)} .card .n.bad{color:var(--bad)}
   .bar{display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap}
@@ -29,7 +29,7 @@
   label.tg{display:flex;align-items:center;gap:7px;color:var(--mut);font-size:13px;cursor:pointer}
   table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
   th,td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--line);font-size:13px}
-  th{background:var(--panel2);color:var(--mut);font-weight:600;text-transform:uppercase;font-size:11px;letter-spacing:.5px}
+  th{background:var(--panel2);color:var(--mut);font-weight:600;font-size:11px;letter-spacing:.5px}
   tr:last-child td{border-bottom:0}
   td.mono,th.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
   .badge{display:inline-block;padding:3px 9px;border-radius:99px;font-size:11px;font-weight:600}
@@ -43,20 +43,20 @@
 </head>
 <body>
 <header>
-  <h1>🐉 VPNGate Proxy Pool</h1>
+  <h1>🐉 VPNGate 代理池</h1>
   <span class="v" id="meta">—</span>
 </header>
 <div class="wrap">
   <div id="banner" class="banner" style="display:none"></div>
   <div class="cards">
-    <div class="card"><div class="k">Live Ports</div><div class="n ok" id="c-live">0</div></div>
-    <div class="card"><div class="k">Total Slots</div><div class="n" id="c-total">0</div></div>
-    <div class="card"><div class="k">Countries</div><div class="n" id="c-countries">0</div></div>
-    <div class="card"><div class="k">Start Port</div><div class="n mono" id="c-start">—</div></div>
+    <div class="card"><div class="k">在线端口</div><div class="n ok" id="c-live">0</div></div>
+    <div class="card"><div class="k">总端口数</div><div class="n" id="c-total">0</div></div>
+    <div class="card"><div class="k">国家数量</div><div class="n" id="c-countries">0</div></div>
+    <div class="card"><div class="k">起始端口</div><div class="n mono" id="c-start">—</div></div>
   </div>
   <div class="bar">
-    <button id="rebal">Force Rebalance</button>
-    <label class="tg"><input type="checkbox" id="auto" checked /> Auto-refresh (5s)</label>
+    <button id="rebal">强制重平衡</button>
+    <label class="tg"><input type="checkbox" id="auto" checked /> 自动刷新（5秒）</label>
     <span class="upd" id="upd">—</span>
   </div>
 
@@ -85,11 +85,11 @@
   <table>
     <thead>
       <tr>
-        <th>#</th><th class="mono">Port</th><th>Country</th><th class="mono">Exit IP</th>
-        <th class="mono">Node ID</th><th class="mono">Device</th><th>Status</th><th>Uptime</th>
+        <th>序号</th><th class="mono">端口</th><th>国家</th><th class="mono">出口 IP</th>
+        <th class="mono">节点 ID</th><th class="mono">设备</th><th>状态</th><th>运行时长</th>
       </tr>
     </thead>
-    <tbody id="rows"><tr><td colspan="8" class="empty">Loading…</td></tr></tbody>
+    <tbody id="rows"><tr><td colspan="8" class="empty">加载中…</td></tr></tbody>
   </table>
 </div>
 <script>
@@ -97,11 +97,11 @@ const $ = id => document.getElementById(id);
 
 function fmtUptime(s){
   if(!s && s!==0) return "—";
-  if(s<60) return s+"s";
+  if(s<60) return s+"秒";
   const h=Math.floor(s/3600), m=Math.floor((s%3600)/60), sec=s%60;
-  if(h>0) return h+"h "+m+"m";
-  if(m>0) return m+"m "+sec+"s";
-  return sec+"s";
+  if(h>0) return h+"小时"+m+"分";
+  if(m>0) return m+"分"+sec+"秒";
+  return sec+"秒";
 }
 function showBanner(msg){ const b=$("banner"); b.textContent=msg; b.style.display="block"; }
 function hideBanner(){ $("banner").style.display="none"; }
@@ -129,7 +129,7 @@ async function refresh(){
     $("c-total").textContent = st.total_slots;
     $("c-countries").textContent = st.countries;
     $("c-start").textContent = st.start_port;
-    $("meta").textContent = "v"+st.version+" · "+st.hostname+" · user: "+st.web_user;
+    $("meta").textContent = "v"+st.version+" · "+st.hostname+" · 账号："+st.web_user;
     const rows = (sl||[]).map((s,i)=>`
       <tr>
         <td>${i+1}</td>
@@ -138,11 +138,11 @@ async function refresh(){
         <td class="mono">${s.exit_ip||"—"}</td>
         <td class="mono" title="${s.node_id}">${s.node_id.slice(0,12)||"—"}</td>
         <td class="mono">${s.device}</td>
-        <td>${s.running?'<span class="badge ok">UP</span>':'<span class="badge bad">DOWN</span>'}</td>
+        <td>${s.running?'<span class="badge ok">在线</span>':'<span class="badge bad">离线</span>'}</td>
         <td>${fmtUptime(s.uptime_secs)}</td>
       </tr>`).join("");
-    $("rows").innerHTML = rows || `<tr><td colspan="8" class="empty">No slots mapped yet.</td></tr>`;
-    $("upd").textContent = "updated " + new Date().toLocaleTimeString();
+    $("rows").innerHTML = rows || `<tr><td colspan="8" class="empty">暂未映射任何端口。</td></tr>`;
+    $("upd").textContent = "更新于 " + new Date().toLocaleTimeString();
   }catch(e){ showBanner("请求失败："+e.message); }
 }
 
@@ -152,7 +152,7 @@ $("rebal").addEventListener("click", async ()=>{
     const r = await fetch("/api/v1/pool/reconcile", {method:"POST", credentials:"include"});
     if(r.status===401){ showBanner("未授权。"); return; }
     await refresh();
-  }catch(e){ showBanner("rebalance 失败："+e.message); }
+  }catch(e){ showBanner("重平衡失败："+e.message); }
   finally{ $("rebal").disabled = false; }
 });
 
@@ -163,7 +163,7 @@ async function loadProxyCreds(){
     if(!r.ok) return;
     const d = await r.json();
     $("pc-user").textContent = d.username || "—";
-    $("pc-sample").textContent = d.username ? (d.username+":***@161.33.24.16:PORT") : "—";
+    $("pc-sample").textContent = d.username ? (d.username+":***@161.33.24.16:端口") : "—";
     $("pc-username").value = d.username || "";
   }catch(e){ /* ignore */ }
 }
@@ -180,13 +180,13 @@ $("pc-save").addEventListener("click", async ()=>{
       body: JSON.stringify({username, password})
     });
     if(r.status===401){ showBanner("未授权。"); return; }
-    if(!r.ok){ const t=await r.text(); $("pc-msg").style.color="var(--bad)"; $("pc-msg").textContent="失败: "+t; return; }
+    if(!r.ok){ const t=await r.text(); $("pc-msg").style.color="var(--bad)"; $("pc-msg").textContent="失败："+t; return; }
     $("pc-msg").style.color="var(--ok)";
     $("pc-msg").textContent="已保存（立即对所有端口生效）";
     $("pc-password").value="";
     await loadProxyCreds();
     await refresh();
-  }catch(e){ $("pc-msg").style.color="var(--bad)"; $("pc-msg").textContent="错误: "+e.message; }
+  }catch(e){ $("pc-msg").style.color="var(--bad)"; $("pc-msg").textContent="错误："+e.message; }
   finally{ $("pc-save").disabled = false; }
 });
 
