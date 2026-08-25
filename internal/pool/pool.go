@@ -15,10 +15,13 @@ package pool
 
 import (
 	"context"
+	"crypto/subtle"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net"
 	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 	"time"
@@ -68,6 +71,13 @@ type Manager struct {
 	stopCh     chan struct{}
 	reconMu    sync.Mutex
 	reconciling bool
+
+	// Proxy credentials for the SOCKS5 listeners. They are mutable at runtime so
+	// the web panel can rotate them without a restart; the gateway closures read
+	// them through getProxyCreds() on every connection.
+	proxyCredsMu sync.RWMutex
+	proxyUser    string
+	proxyPass    string
 }
 
 // NewManager constructs a pool Manager.
@@ -91,6 +101,9 @@ func (m *Manager) Start(ctx context.Context) error {
 		"discovery_interval_s", m.cfg.PoolDiscoveryIntervalSecs,
 		"reconcile_interval_s", m.cfg.PoolReconcileIntervalSecs,
 	)
+	if err := m.loadProxyCredentials(); err != nil {
+		slog.Warn("pool load proxy credentials failed; using env defaults", "module", "pool", "err", err)
+	}
 	m.reconcile(ctx)
 	go m.loop(ctx)
 	return nil
@@ -322,35 +335,32 @@ func (m *Manager) startNode(ctx context.Context, port int, node domain.ProxyNode
 		return nil
 	}
 	connector := proxy.NewSocketConnector(device, m.cfg.ProxyDNSServer, m.cfg.ProxyConnectTimeout())
-	// Read proxy credentials directly from the environment. The env-library
-	// prefix parsing occasionally fails to populate ProxyPassword, so we
-	// resolve them here unconditionally to guarantee auth is configured.
-	proxyUser := m.cfg.ProxyUsername
-	if proxyUser == "" {
-		proxyUser = os.Getenv("FREE_PROXY_PROXY_USERNAME")
-	}
-	proxyPass := m.cfg.ProxyPassword
-	if proxyPass == "" {
-		proxyPass = os.Getenv("FREE_PROXY_PROXY_PASSWORD")
-	}
+	// Credentials are read live from the manager on every connection so a
+	// runtime rotation (via the web panel) applies immediately to all ports,
+	// including ones already listening.
+	initUser, initPass := m.getProxyCreds()
 	gw := proxy.New(proxy.Options{
 		Host:            "0.0.0.0",
 		Port:            port,
 		MaxConnections: m.cfg.ProxyMaxConnections,
 		ConnectTimeout:  m.cfg.ProxyConnectTimeout(),
 		IdleTimeout:     m.cfg.ProxyIdleTimeout(),
-		Username:        proxyUser,
-		Password:        proxyPass,
+		Username:        initUser,
+		Password:        initPass,
 		AuthRequired: func() bool {
-			return proxyUser != "" && proxyPass != ""
+			u, p := m.getProxyCreds()
+			return u != "" && p != ""
 		},
 		Authenticate: func(username, password string) bool {
-			return username == proxyUser && password == proxyPass
+			u, p := m.getProxyCreds()
+			return subtle.ConstantTimeCompare([]byte(username), []byte(u)) == 1 &&
+				subtle.ConstantTimeCompare([]byte(password), []byte(p)) == 1
 		},
 		// Pool ports are meant to be reached from outside, but only behind
 		// proxy auth — never as an open relay.
 		ExternalAllowed: func() bool {
-			return proxyUser != "" && proxyPass != ""
+			u, p := m.getProxyCreds()
+			return u != "" && p != ""
 		},
 	}, connector)
 	if err := gw.Start(ctx); err != nil {
@@ -568,4 +578,93 @@ func deviceIP(name string) string {
 		}
 	}
 	return ""
+}
+
+// getProxyCreds returns the current SOCKS5 credentials in a race-safe way.
+func (m *Manager) getProxyCreds() (string, string) {
+	m.proxyCredsMu.RLock()
+	defer m.proxyCredsMu.RUnlock()
+	return m.proxyUser, m.proxyPass
+}
+
+// ProxyCredentials returns the configured username (password is intentionally
+// not exposed over the API in clear text).
+func (m *Manager) ProxyCredentials() (string, bool) {
+	u, p := m.getProxyCreds()
+	return u, u != "" && p != ""
+}
+
+// SetProxyCredentials updates the SOCKS5 credentials at runtime and persists
+// them to disk so they survive a restart. Already-listening ports pick up the
+// new values on the next connection because their auth closures read live state.
+func (m *Manager) SetProxyCredentials(user, pass string) error {
+	m.proxyCredsMu.Lock()
+	m.proxyUser = user
+	m.proxyPass = pass
+	m.proxyCredsMu.Unlock()
+	return m.saveProxyCredentials()
+}
+
+func (m *Manager) credsPath() string {
+	return filepath.Join(m.cfg.DataDir, "proxy-credentials.json")
+}
+
+// loadProxyCredentials seeds the in-memory credentials from the environment
+// (which is the service default) and then overrides them with any persisted
+// file. If no file exists yet, the env defaults are written out so the file is
+// created and future rotations have a backing store.
+func (m *Manager) loadProxyCredentials() error {
+	user := m.cfg.ProxyUsername
+	if user == "" {
+		user = os.Getenv("FREE_PROXY_PROXY_USERNAME")
+	}
+	pass := m.cfg.ProxyPassword
+	if pass == "" {
+		pass = os.Getenv("FREE_PROXY_PROXY_PASSWORD")
+	}
+	m.proxyCredsMu.Lock()
+	m.proxyUser = user
+	m.proxyPass = pass
+	m.proxyCredsMu.Unlock()
+
+	data, err := os.ReadFile(m.credsPath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return m.saveProxyCredentials()
+		}
+		return err
+	}
+	var saved struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := json.Unmarshal(data, &saved); err != nil {
+		return err
+	}
+	m.proxyCredsMu.Lock()
+	if saved.Username != "" {
+		m.proxyUser = saved.Username
+	}
+	if saved.Password != "" {
+		m.proxyPass = saved.Password
+	}
+	m.proxyCredsMu.Unlock()
+	return nil
+}
+
+func (m *Manager) saveProxyCredentials() error {
+	m.proxyCredsMu.RLock()
+	saved := struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}{m.proxyUser, m.proxyPass}
+	m.proxyCredsMu.RUnlock()
+	data, err := json.MarshalIndent(saved, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(m.cfg.DataDir, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(m.credsPath(), data, 0o600)
 }

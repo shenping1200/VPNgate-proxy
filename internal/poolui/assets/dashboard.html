@@ -59,6 +59,29 @@
     <label class="tg"><input type="checkbox" id="auto" checked /> Auto-refresh (5s)</label>
     <span class="upd" id="upd">—</span>
   </div>
+
+  <div class="card" style="margin-bottom:20px">
+    <div class="k">SOCKS5 代理账号密码</div>
+    <div style="color:var(--mut);font-size:12px;margin:6px 0 12px">
+      当前账号：<span class="mono" id="pc-user">—</span>
+      （客户端连接格式：<span class="mono" id="pc-sample">—</span>）
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+      <div style="display:flex;flex-direction:column;gap:4px">
+        <label class="tg" style="cursor:default">代理账号</label>
+        <input id="pc-username" type="text" placeholder="vpnuser"
+          style="background:var(--panel2);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:9px 12px;font-size:13px;min-width:180px" />
+      </div>
+      <div style="display:flex;flex-direction:column;gap:4px">
+        <label class="tg" style="cursor:default">代理密码</label>
+        <input id="pc-password" type="text" placeholder="留空则保持原密码"
+          style="background:var(--panel2);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:9px 12px;font-size:13px;min-width:220px" />
+      </div>
+      <button id="pc-save">保存代理凭据</button>
+      <span id="pc-msg" style="color:var(--ok);font-size:13px"></span>
+    </div>
+  </div>
+
   <table>
     <thead>
       <tr>
@@ -133,11 +156,45 @@ $("rebal").addEventListener("click", async ()=>{
   finally{ $("rebal").disabled = false; }
 });
 
+async function loadProxyCreds(){
+  try{
+    const r = await fetch("/api/v1/pool/proxy-credentials", {credentials:"include"});
+    if(r.status===401) return;
+    if(!r.ok) return;
+    const d = await r.json();
+    $("pc-user").textContent = d.username || "—";
+    $("pc-sample").textContent = d.username ? (d.username+":***@161.33.24.16:PORT") : "—";
+    $("pc-username").value = d.username || "";
+  }catch(e){ /* ignore */ }
+}
+
+$("pc-save").addEventListener("click", async ()=>{
+  const username = $("pc-username").value.trim();
+  const password = $("pc-password").value;
+  if(!username){ $("pc-msg").style.color="var(--bad)"; $("pc-msg").textContent="账号不能为空"; return; }
+  $("pc-save").disabled = true;
+  try{
+    const r = await fetch("/api/v1/pool/proxy-credentials", {
+      method:"POST", credentials:"include",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({username, password})
+    });
+    if(r.status===401){ showBanner("未授权。"); return; }
+    if(!r.ok){ const t=await r.text(); $("pc-msg").style.color="var(--bad)"; $("pc-msg").textContent="失败: "+t; return; }
+    $("pc-msg").style.color="var(--ok)";
+    $("pc-msg").textContent="已保存（立即对所有端口生效）";
+    $("pc-password").value="";
+    await loadProxyCreds();
+    await refresh();
+  }catch(e){ $("pc-msg").style.color="var(--bad)"; $("pc-msg").textContent="错误: "+e.message; }
+  finally{ $("pc-save").disabled = false; }
+});
+
 let timer=null;
 function schedule(){ if(timer) clearInterval(timer); if($("auto").checked) timer=setInterval(refresh,5000); }
 $("auto").addEventListener("change", schedule);
 
-refresh(); schedule();
+refresh(); schedule(); loadProxyCreds();
 </script>
 </body>
 </html>

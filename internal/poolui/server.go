@@ -50,6 +50,7 @@ func Start(ctx context.Context, cfg *config.Config, mgr *pool.Manager, version s
 	mux.HandleFunc("/api/v1/pool/statistics", s.basicAuth(s.handleStatistics))
 	mux.HandleFunc("/api/v1/pool/slots", s.basicAuth(s.handleSlots))
 	mux.HandleFunc("/api/v1/pool/reconcile", s.basicAuth(s.handleReconcile))
+	mux.HandleFunc("/api/v1/pool/proxy-credentials", s.basicAuth(s.handleProxyCredentials))
 
 	addr := net.JoinHostPort(cfg.PoolWebHost, itoa(cfg.PoolWebPort))
 	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
@@ -107,6 +108,7 @@ type statistics struct {
 	LiveSlots  int    `json:"live_slots"`
 	Countries  int    `json:"countries"`
 	WebUser    string `json:"web_user"`
+	ProxyUser  string `json:"proxy_user"`
 }
 
 func (s *Server) handleStatistics(w http.ResponseWriter, _ *http.Request) {
@@ -122,6 +124,7 @@ func (s *Server) handleStatistics(w http.ResponseWriter, _ *http.Request) {
 		}
 	}
 	host, _ := os.Hostname()
+	pUser, _ := s.mgr.ProxyCredentials()
 	writeJSON(w, statistics{
 		Version:    s.version,
 		Hostname:   host,
@@ -132,6 +135,7 @@ func (s *Server) handleStatistics(w http.ResponseWriter, _ *http.Request) {
 		LiveSlots:  live,
 		Countries:  len(countries),
 		WebUser:    s.user,
+		ProxyUser:  pUser,
 	})
 }
 
@@ -142,6 +146,40 @@ func (s *Server) handleSlots(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) handleReconcile(w http.ResponseWriter, _ *http.Request) {
 	s.mgr.ReconcileNow(context.Background())
 	writeJSON(w, map[string]any{"ok": true, "reconciling": true})
+}
+
+// handleProxyCredentials lets the operator rotate the SOCKS5 credentials at
+// runtime. GET returns the current username (password is never exposed in
+// clear text); POST updates both and persists them to disk.
+func (s *Server) handleProxyCredentials(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		user, configured := s.mgr.ProxyCredentials()
+		writeJSON(w, map[string]any{"username": user, "configured": configured})
+		return
+	case http.MethodPost:
+		var body struct {
+			Username string `json:"username"`
+			Password string `json:"password"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "invalid body", http.StatusBadRequest)
+			return
+		}
+		if body.Username == "" {
+			http.Error(w, "username required", http.StatusBadRequest)
+			return
+		}
+		if err := s.mgr.SetProxyCredentials(body.Username, body.Password); err != nil {
+			http.Error(w, "persist failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		slog.Info("pool proxy credentials updated via web panel", "module", "poolui", "user", body.Username)
+		writeJSON(w, map[string]any{"ok": true, "username": body.Username})
+		return
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
