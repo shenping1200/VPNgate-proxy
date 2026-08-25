@@ -586,7 +586,7 @@ type RotateSessionView struct {
 func (m *Manager) RotateSessions() []RotateSessionView {
 	m.rotateMu.Lock()
 	keys := make([]string, 0, len(m.rotateSessions))
-	sess := make(map[string]int, m.rotateSessions)
+	sess := make(map[string]int, len(m.rotateSessions))
 	for k, v := range m.rotateSessions {
 		keys = append(keys, k)
 		sess[k] = v
