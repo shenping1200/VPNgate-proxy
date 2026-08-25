@@ -33,9 +33,6 @@ func poolCmd() *cobra.Command {
 			if !cfg.PoolEnabled {
 				return fmt.Errorf("proxy pool is disabled; set FREE_PROXY_POOL_ENABLED=true")
 			}
-			if cfg.ProxyUsername == "" || cfg.ProxyPassword == "" {
-				return fmt.Errorf("proxy pool requires FREE_PROXY_PROXY_USERNAME and FREE_PROXY_PROXY_PASSWORD (open relay protection)")
-			}
 			if err := cfg.EnsureDirectories(); err != nil {
 				return err
 			}

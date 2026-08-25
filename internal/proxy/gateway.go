@@ -37,6 +37,15 @@ type Options struct {
 	// the proxy. nil denies external access. Loopback clients always reach protocol
 	// handling, where the same configured authentication policy is enforced.
 	ExternalAllowed func() bool
+	// ConnectorFor, when set, overrides the static connector with a per-connection
+	// connector chosen by the client's SOCKS5 username. It powers the rotating
+	// pool port: one listener spreads connections across the pool, binding each
+	// session (username) to a stable node.
+	ConnectorFor func(username string) (OutboundConnector, error)
+	// OpenExternalNoAuth allows non-loopback clients even when no credentials are
+	// configured. Use only for deliberate open modes (e.g. the rotating port, or a
+	// pool the operator has chosen to leave unauthenticated).
+	OpenExternalNoAuth bool
 }
 
 // Gateway is the unified SOCKS5/HTTP proxy server.
@@ -91,9 +100,19 @@ func (g *Gateway) allowClient(conn net.Conn) bool {
 	}
 	extOK := g.opts.ExternalAllowed != nil && g.opts.ExternalAllowed()
 	auth := g.authEnabled()
-	allowed := extOK && auth
-	slog.Info("allowClient decision", "remote", remote, "loopback", loop, "external_allowed", extOK, "auth_enabled", auth, "allowed", allowed)
+	allowed := extOK && (auth || g.opts.OpenExternalNoAuth)
+	slog.Info("allowClient decision", "remote", remote, "loopback", loop, "external_allowed", extOK, "auth_enabled", auth, "open_no_auth", g.opts.OpenExternalNoAuth, "allowed", allowed)
 	return allowed
+}
+
+// connectorFor returns the connector to use for a connection. When ConnectorFor
+// is configured it is consulted with the client username so the rotating port
+// can bind each session to its own node; otherwise the static connector is used.
+func (g *Gateway) connectorFor(username string) (OutboundConnector, error) {
+	if g.opts.ConnectorFor != nil {
+		return g.opts.ConnectorFor(username)
+	}
+	return g.connector, nil
 }
 
 func isLoopbackAddr(remoteAddr string) bool {

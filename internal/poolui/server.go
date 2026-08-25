@@ -51,6 +51,8 @@ func Start(ctx context.Context, cfg *config.Config, mgr *pool.Manager, version s
 	mux.HandleFunc("/api/v1/pool/slots", s.basicAuth(s.handleSlots))
 	mux.HandleFunc("/api/v1/pool/reconcile", s.basicAuth(s.handleReconcile))
 	mux.HandleFunc("/api/v1/pool/proxy-credentials", s.basicAuth(s.handleProxyCredentials))
+	mux.HandleFunc("/api/v1/pool/rotate/sessions", s.basicAuth(s.handleRotateSessions))
+	mux.HandleFunc("/api/v1/pool/rotate/recycle", s.basicAuth(s.handleRotateRecycle))
 
 	addr := net.JoinHostPort(cfg.PoolWebHost, itoa(cfg.PoolWebPort))
 	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
@@ -109,6 +111,7 @@ type statistics struct {
 	Countries  int    `json:"countries"`
 	WebUser    string `json:"web_user"`
 	ProxyUser  string `json:"proxy_user"`
+	RotatePort int    `json:"rotate_port"`
 }
 
 func (s *Server) handleStatistics(w http.ResponseWriter, _ *http.Request) {
@@ -136,6 +139,7 @@ func (s *Server) handleStatistics(w http.ResponseWriter, _ *http.Request) {
 		Countries:  len(countries),
 		WebUser:    s.user,
 		ProxyUser:  pUser,
+		RotatePort: s.mgr.RotatePort(),
 	})
 }
 
@@ -180,6 +184,27 @@ func (s *Server) handleProxyCredentials(w http.ResponseWriter, r *http.Request) 
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// handleRotateSessions returns the current session -> node mapping for the
+// rotating port.
+func (s *Server) handleRotateSessions(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, s.mgr.RotateSessions())
+}
+
+// handleRotateRecycle drops a session binding (or all, when session is empty)
+// so the next connection re-selects a node.
+func (s *Server) handleRotateRecycle(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Session string `json:"session"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	s.mgr.RecycleSession(body.Session)
+	writeJSON(w, map[string]any{"ok": true})
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

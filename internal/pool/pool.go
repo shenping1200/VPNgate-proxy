@@ -17,6 +17,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -78,6 +79,14 @@ type Manager struct {
 	proxyCredsMu sync.RWMutex
 	proxyUser    string
 	proxyPass    string
+
+	// Rotation (backconnect) port: one shared listener that spreads connections
+	// across the pool. Each client username is a session key bound to a stable
+	// node; an empty username falls back to per-connection round-robin.
+	rotateMu       sync.Mutex
+	rotateSessions map[string]int
+	rotateRR       int
+	rotateGW       *proxy.Gateway
 }
 
 // NewManager constructs a pool Manager.
@@ -105,6 +114,9 @@ func (m *Manager) Start(ctx context.Context) error {
 		slog.Warn("pool load proxy credentials failed; using env defaults", "module", "pool", "err", err)
 	}
 	m.reconcile(ctx)
+	if err := m.startRotateGateway(ctx); err != nil {
+		slog.Warn("pool rotate gateway failed to start", "module", "pool", "err", err)
+	}
 	go m.loop(ctx)
 	return nil
 }
@@ -115,6 +127,9 @@ func (m *Manager) Stop() {
 	case <-m.stopCh:
 	default:
 		close(m.stopCh)
+	}
+	if m.rotateGW != nil {
+		_ = m.rotateGW.Stop()
 	}
 	m.teardownAll()
 }
@@ -356,12 +371,13 @@ func (m *Manager) startNode(ctx context.Context, port int, node domain.ProxyNode
 			return subtle.ConstantTimeCompare([]byte(username), []byte(u)) == 1 &&
 				subtle.ConstantTimeCompare([]byte(password), []byte(p)) == 1
 		},
-		// Pool ports are meant to be reached from outside, but only behind
-		// proxy auth — never as an open relay.
+		// Pool ports are reachable from outside. When credentials are
+		// configured they are required; when blank the port is open (unified
+		// blank=open rule), which is the operator's deliberate choice.
 		ExternalAllowed: func() bool {
-			u, p := m.getProxyCreds()
-			return u != "" && p != ""
+			return true
 		},
+		OpenExternalNoAuth: true,
 	}, connector)
 	if err := gw.Start(ctx); err != nil {
 		slog.Warn("pool gateway start failed; stopping tunnel", "module", "pool", "port", port, "err", err)
@@ -434,6 +450,189 @@ func (m *Manager) Size() int {
 func (m *Manager) ReconcileNow(ctx context.Context) {
 	slog.Info("pool manual reconcile requested", "module", "pool")
 	m.reconcile(ctx)
+}
+
+// startRotateGateway brings up the shared rotating (backconnect) port when
+// enabled. The gateway reads the live proxy credentials for auth and selects a
+// per-connection connector via pickConnector, so each client username (session
+// key) is bound to a stable pool node.
+func (m *Manager) startRotateGateway(ctx context.Context) error {
+	if !m.cfg.PoolRotateEnabled {
+		slog.Info("pool rotate gateway disabled", "module", "pool")
+		return nil
+	}
+	m.rotateMu.Lock()
+	m.rotateSessions = make(map[string]int)
+	m.rotateMu.Unlock()
+
+	// Base connector is unused because ConnectorFor is set, but New requires one.
+	base := proxy.NewSocketConnector("", m.cfg.ProxyDNSServer, m.cfg.ProxyConnectTimeout())
+	gw := proxy.New(proxy.Options{
+		Host:            "0.0.0.0",
+		Port:            m.cfg.PoolRotatePort,
+		MaxConnections: m.cfg.ProxyMaxConnections,
+		ConnectTimeout:  m.cfg.ProxyConnectTimeout(),
+		IdleTimeout:     m.cfg.ProxyIdleTimeout(),
+		AuthRequired: func() bool {
+			u, p := m.getProxyCreds()
+			return u != "" && p != ""
+		},
+		Authenticate: func(username, password string) bool {
+			u, p := m.getProxyCreds()
+			return subtle.ConstantTimeCompare([]byte(username), []byte(u)) == 1 &&
+				subtle.ConstantTimeCompare([]byte(password), []byte(p)) == 1
+		},
+		// The rotating port is intentionally reachable from outside. When no
+		// credentials are configured it is open (unified blank=open rule);
+		// when credentials are set, auth is enforced.
+		ExternalAllowed:    func() bool { return true },
+		OpenExternalNoAuth: true,
+		ConnectorFor: func(username string) (proxy.OutboundConnector, error) {
+			return m.pickConnector(username)
+		},
+	}, base)
+	if err := gw.Start(ctx); err != nil {
+		return err
+	}
+	m.rotateMu.Lock()
+	m.rotateGW = gw
+	m.rotateMu.Unlock()
+	slog.Info("pool rotate gateway up", "module", "pool", "port", m.cfg.PoolRotatePort)
+	return nil
+}
+
+// pickConnector returns a connector for the given session key. A non-empty
+// username is bound to a stable node (sticky) until that node dies; an empty
+// username gets a fresh per-connection node via round-robin.
+func (m *Manager) pickConnector(username string) (proxy.OutboundConnector, error) {
+	m.rotateMu.Lock()
+	defer m.rotateMu.Unlock()
+
+	healthy := m.healthySlotIndices()
+	if len(healthy) == 0 {
+		return nil, errors.New("pool has no healthy slots")
+	}
+
+	if username != "" {
+		if idx, ok := m.rotateSessions[username]; ok && m.slotIndexHealthy(idx) {
+			return m.connectorForSlot(idx)
+		}
+		// Assign a healthy slot, spreading sessions across the pool.
+		pick := healthy[m.rotateRR%len(healthy)]
+		m.rotateRR++
+		m.rotateSessions[username] = pick
+		return m.connectorForSlot(pick)
+	}
+
+	// Empty username: per-connection round-robin.
+	pick := healthy[m.rotateRR%len(healthy)]
+	m.rotateRR++
+	return m.connectorForSlot(pick)
+}
+
+// healthySlotIndices returns the indices of currently-running slots. Callers
+// must not hold m.rotateMu; this only takes m.mu, which is safe because rotateMu
+// is always acquired before m.mu in this file.
+func (m *Manager) healthySlotIndices() []int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]int, 0, len(m.slots))
+	for i, s := range m.slots {
+		if s != nil && s.Managed != nil && s.Managed.Running() {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+func (m *Manager) slotIndexHealthy(i int) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if i < 0 || i >= len(m.slots) {
+		return false
+	}
+	s := m.slots[i]
+	return s != nil && s.Managed != nil && s.Managed.Running()
+}
+
+// connectorForSlot builds a connector bound to the device of the slot at index
+// i. It returns nil (without panicking) if the slot is missing or out of range.
+func (m *Manager) connectorForSlot(i int) (proxy.OutboundConnector, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if i < 0 || i >= len(m.slots) {
+		return nil, errors.New("slot index out of range")
+	}
+	s := m.slots[i]
+	if s == nil {
+		return nil, errors.New("slot not allocated")
+	}
+	return proxy.NewSocketConnector(s.Device, m.cfg.ProxyDNSServer, m.cfg.ProxyConnectTimeout()), nil
+}
+
+// RotateSessionView is the serialisable view of a rotation session mapping.
+type RotateSessionView struct {
+	Session string `json:"session"`
+	Port    int    `json:"port"`
+	Device  string `json:"device"`
+	NodeID  string `json:"node_id"`
+	Country string `json:"country"`
+	ExitIP  string `json:"exit_ip"`
+	Running bool   `json:"running"`
+}
+
+// RotateSessions returns the current session -> node mapping for the rotating
+// port.
+func (m *Manager) RotateSessions() []RotateSessionView {
+	m.rotateMu.Lock()
+	keys := make([]string, 0, len(m.rotateSessions))
+	sess := make(map[string]int, m.rotateSessions)
+	for k, v := range m.rotateSessions {
+		keys = append(keys, k)
+		sess[k] = v
+	}
+	m.rotateMu.Unlock()
+
+	out := make([]RotateSessionView, 0, len(keys))
+	for _, k := range keys {
+		idx := sess[k]
+		m.mu.Lock()
+		sv := RotateSessionView{Session: k}
+		if idx >= 0 && idx < len(m.slots) && m.slots[idx] != nil {
+			s := m.slots[idx]
+			sv.Port = s.Port
+			sv.Device = s.Device
+			sv.NodeID = s.NodeID
+			sv.Country = s.Country
+			sv.ExitIP = deviceIP(s.Device)
+			sv.Running = s.Managed != nil && s.Managed.Running()
+		}
+		m.mu.Unlock()
+		out = append(out, sv)
+	}
+	return out
+}
+
+// RecycleSession drops the binding for one session (or all, when key is empty)
+// so the next connection re-selects a node.
+func (m *Manager) RecycleSession(key string) {
+	m.rotateMu.Lock()
+	defer m.rotateMu.Unlock()
+	if key == "" {
+		for k := range m.rotateSessions {
+			delete(m.rotateSessions, k)
+		}
+		return
+	}
+	delete(m.rotateSessions, key)
+}
+
+// RotatePort reports the configured rotating port (0 if disabled).
+func (m *Manager) RotatePort() int {
+	if !m.cfg.PoolRotateEnabled {
+		return 0
+	}
+	return m.cfg.PoolRotatePort
 }
 
 // slotLen returns the number of allocated port positions (including nil holes).

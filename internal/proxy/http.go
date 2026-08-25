@@ -33,7 +33,12 @@ func (g *Gateway) serveHTTP(ctx context.Context, conn net.Conn, br *bufio.Reader
 
 func (g *Gateway) httpConnect(ctx context.Context, conn net.Conn, hostport string) {
 	host, port := splitHostPort(hostport, 443)
-	targetConn, err := g.connector.Dial(ctx, host, port)
+	connector, err := g.connectorFor("")
+	if err != nil {
+		_, _ = conn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n"))
+		return
+	}
+	targetConn, err := connector.Dial(ctx, host, port)
 	if err != nil {
 		_, _ = conn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n"))
 		return
@@ -57,7 +62,12 @@ func (g *Gateway) httpForward(ctx context.Context, conn net.Conn, req *http.Requ
 	if p := req.URL.Port(); p != "" {
 		port = atoiDefault(p, 80)
 	}
-	targetConn, err := g.connector.Dial(ctx, host, port)
+	connector, err := g.connectorFor("")
+	if err != nil {
+		_, _ = conn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n"))
+		return
+	}
+	targetConn, err := connector.Dial(ctx, host, port)
 	if err != nil {
 		_, _ = conn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n"))
 		return

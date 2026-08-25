@@ -103,6 +103,12 @@ type Config struct {
 	// first) for each SOCKS5 port, so a single dead node no longer leaves a hole
 	// in the otherwise-contiguous port block. 0 means no extra retries.
 	PoolBuildRetries           int    `env:"POOL_BUILD_RETRIES" envDefault:"3"`
+	// PoolRotateEnabled turns on the shared "rotating" backconnect port: a single
+	// SOCKS5 listener that spreads connections across the pool, binding each
+	// client username (session key) to a stable node. An empty username falls
+	// back to per-connection round-robin.
+	PoolRotateEnabled bool `env:"POOL_ROTATE_ENABLED" envDefault:"true"`
+	PoolRotatePort    int  `env:"POOL_ROTATE_PORT" envDefault:"41111"`
 	// Pool web management panel (served by `pool` mode). Falls back to the proxy
 	// credentials when POOL_WEB_PASSWORD is empty, so a single secret governs both.
 	PoolWebEnabled  bool   `env:"POOL_WEB_ENABLED" envDefault:"true"`

@@ -82,6 +82,26 @@
     </div>
   </div>
 
+  <div class="card" style="margin-bottom:20px">
+    <div class="k">旋转端口（自动轮换 IP）</div>
+    <div style="color:var(--mut);font-size:12px;margin:6px 0 12px">
+      端口 <span class="mono" id="rt-port">—</span> ·
+      客户端账号填 <span class="mono">环境标识</span>（如 env1）、密码留空 → 每个环境固定不同 IP；
+      账号密码都留空 → 每连接随机轮换。
+    </div>
+    <div style="display:flex;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+      <button id="rt-recycle-all" class="ghost">全部换 IP</button>
+      <span id="rt-msg" style="color:var(--ok);font-size:13px"></span>
+    </div>
+    <table>
+      <thead><tr>
+        <th>会话（账号）</th><th class="mono">绑定端口</th><th>国家</th>
+        <th class="mono">出口 IP</th><th>状态</th><th>操作</th>
+      </tr></thead>
+      <tbody id="rt-rows"><tr><td colspan="6" class="empty">暂无连接会话。</td></tr></tbody>
+    </table>
+  </div>
+
   <table>
     <thead>
       <tr>
@@ -129,6 +149,7 @@ async function refresh(){
     $("c-total").textContent = st.total_slots;
     $("c-countries").textContent = st.countries;
     $("c-start").textContent = st.start_port;
+    $("rt-port").textContent = st.rotate_port || "—";
     $("meta").textContent = "v"+st.version+" · "+st.hostname+" · 账号："+st.web_user;
     const rows = (sl||[]).map((s,i)=>`
       <tr>
@@ -143,8 +164,57 @@ async function refresh(){
       </tr>`).join("");
     $("rows").innerHTML = rows || `<tr><td colspan="8" class="empty">暂未映射任何端口。</td></tr>`;
     $("upd").textContent = "更新于 " + new Date().toLocaleTimeString();
+    await loadRotateSessions();
   }catch(e){ showBanner("请求失败："+e.message); }
 }
+
+async function loadRotateSessions(){
+  try{
+    const r = await fetch("/api/v1/pool/rotate/sessions", {credentials:"include"});
+    if(r.status===401) return;
+    if(!r.ok) return;
+    const list = await r.json();
+    const rows = (list||[]).map(s=>`
+      <tr>
+        <td class="mono">${s.session}</td>
+        <td class="mono">${s.port||"—"}</td>
+        <td>${s.country||"—"}</td>
+        <td class="mono">${s.exit_ip||"—"}</td>
+        <td>${s.running?'<span class="badge ok">在线</span>':'<span class="badge bad">离线</span>'}</td>
+        <td><button class="ghost rt-one" data-session="${s.session}">换 IP</button></td>
+      </tr>`).join("");
+    $("rt-rows").innerHTML = rows || `<tr><td colspan="6" class="empty">暂无连接会话。</td></tr>`;
+    document.querySelectorAll("#rt-rows button.rt-one").forEach(b=>{
+      b.addEventListener("click", ()=> recycleOne(b.dataset.session));
+    });
+  }catch(e){ /* ignore */ }
+}
+
+function recycleOne(session){
+  fetch("/api/v1/pool/rotate/recycle", {
+    method:"POST", credentials:"include",
+    headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({session})
+  }).then(()=>{
+    $("rt-msg").textContent = "已为「"+session+"」重新分配 IP";
+    setTimeout(()=>{ $("rt-msg").textContent=""; }, 3000);
+    refresh();
+  }).catch(e=> showBanner("换 IP 失败："+e.message));
+}
+
+$("rt-recycle-all").addEventListener("click", async ()=>{
+  try{
+    const r = await fetch("/api/v1/pool/rotate/recycle", {
+      method:"POST", credentials:"include",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({session:""})
+    });
+    if(r.status===401){ showBanner("未授权。"); return; }
+    $("rt-msg").textContent = "已全部重新分配 IP";
+    setTimeout(()=>{ $("rt-msg").textContent=""; }, 3000);
+    await refresh();
+  }catch(e){ showBanner("换 IP 失败："+e.message); }
+});
 
 $("rebal").addEventListener("click", async ()=>{
   $("rebal").disabled = true;
