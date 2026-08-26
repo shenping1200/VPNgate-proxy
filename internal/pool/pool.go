@@ -124,7 +124,11 @@ func (m *Manager) Start(ctx context.Context) error {
 	if err := m.startRotateGateway(ctx); err != nil {
 		slog.Warn("pool rotate gateway failed to start", "module", "pool", "err", err)
 	}
-	m.reconcile(ctx)
+	// Run the initial full reconcile in the background: filling 200 slots
+	// against flaky public nodes can take minutes, and we must not block the
+	// background loop from starting -- its repair ticker is what keeps dropped
+	// nodes healthy within seconds.
+	go m.reconcile(ctx)
 	go m.loop(ctx)
 	return nil
 }
