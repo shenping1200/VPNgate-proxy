@@ -23,12 +23,15 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"sync"
 	"time"
 
 	"github.com/shenping1200/VPNgate-proxy/internal/config"
 	"github.com/shenping1200/VPNgate-proxy/internal/domain"
+	"github.com/shenping1200/VPNgate-proxy/internal/naming"
+	"github.com/shenping1200/VPNgate-proxy/internal/netx"
 	"github.com/shenping1200/VPNgate-proxy/internal/proxy"
 	"github.com/shenping1200/VPNgate-proxy/internal/services"
 	"github.com/shenping1200/VPNgate-proxy/internal/store"
@@ -37,14 +40,15 @@ import (
 
 // Slot is one SOCKS5 port bound to one VPN node via its own TUN device.
 type Slot struct {
-	Index     int
-	Port      int
-	Device    string
-	NodeID    string
-	Country   string
-	Managed   *tunnel.Managed
-	Gateway   *proxy.Gateway
-	StartedAt time.Time
+	Index        int
+	Port         int
+	Device       string
+	NodeID       string
+	Country      string
+	Managed      *tunnel.Managed
+	Gateway      *proxy.Gateway
+	RoutingTable int // dedicated policy routing table for this device's egress
+	StartedAt    time.Time
 }
 
 // SlotView is the safe, serialisable view of a Slot for API/CLI output.
@@ -352,6 +356,20 @@ func (m *Manager) startNode(ctx context.Context, port int, node domain.ProxyNode
 			"node", node.ID, "device", device, "msg", res.Message)
 		return nil
 	}
+	// Each pool TUN needs its own default route so SO_BINDTODEVICE sockets exit
+	// through it. Without it the tunnel comes up but has no egress route and
+	// every connection times out. The single-tunnel PolicyRouter installs an
+	// identical route for the active device; here we do the same per pool device,
+	// in a dedicated routing table so a socket bound to one tunnel can never
+	// resolve another tunnel's egress. If the route cannot be installed we do
+	// not publish the port: a "live" slot must mean working egress.
+	table := naming.PoolRoutingTableBase + offset
+	if err := m.setupDeviceEgress(ctx, device, table); err != nil {
+		slog.Warn("pool egress route setup failed; stopping tunnel", "module", "pool",
+			"device", device, "table", table, "err", err)
+		managed.Stop()
+		return nil
+	}
 	connector := proxy.NewSocketConnector(device, m.cfg.ProxyDNSServer, m.cfg.ProxyConnectTimeout())
 	// Credentials are read live from the manager on every connection so a
 	// runtime rotation (via the web panel) applies immediately to all ports,
@@ -385,18 +403,55 @@ func (m *Manager) startNode(ctx context.Context, port int, node domain.ProxyNode
 	if err := gw.Start(ctx); err != nil {
 		slog.Warn("pool gateway start failed; stopping tunnel", "module", "pool", "port", port, "err", err)
 		managed.Stop()
+		m.cleanupDeviceEgress(device, table)
 		return nil
 	}
 	return &Slot{
-		Index:     offset,
-		Port:      port,
-		Device:    device,
-		NodeID:    node.ID,
-		Country:   node.Country,
-		Managed:   managed,
-		Gateway:   gw,
-		StartedAt: time.Now(),
+		Index:        offset,
+		Port:         port,
+		Device:       device,
+		NodeID:       node.ID,
+		Country:      node.Country,
+		Managed:      managed,
+		Gateway:      gw,
+		RoutingTable: table,
+		StartedAt:    time.Now(),
 	}
+}
+
+// setupDeviceEgress installs a per-device default route (+ oif rule + relaxed
+// rp_filter) so sockets bound to device via SO_BINDTODEVICE actually exit
+// through that tunnel. Each device uses its own routing table (table) so the
+// route is scoped to the one tunnel and never another's.
+func (m *Manager) setupDeviceEgress(ctx context.Context, device string, table int) error {
+	if runtime.GOOS != "linux" {
+		// Non-Linux hosts (CI, macOS dev) have no iproute2; the pool is only ever
+		// deployed on Linux and SO_BINDTODEVICE is a no-op off Linux, so skip.
+		return nil
+	}
+	pr := netx.NewPolicyRouter(nil, netx.PolicyRouterConfig{
+		Table:         table,
+		Interface:     device,
+		DevicePrefix:  m.cfg.ProbeDevicePrefix,
+		SetupRetries:  m.cfg.RoutingSetupRetries,
+		RetryInterval: m.cfg.RoutingRetryInterval(),
+		StrictRPF:     m.cfg.RoutingStrictRPFilter,
+	})
+	return pr.Setup(ctx, device)
+}
+
+// cleanupDeviceEgress removes the route/rule/rp_filter this project installed
+// for device+table. Safe to call even if setup was never performed.
+func (m *Manager) cleanupDeviceEgress(device string, table int) {
+	if runtime.GOOS != "linux" || device == "" || table == 0 {
+		return
+	}
+	pr := netx.NewPolicyRouter(nil, netx.PolicyRouterConfig{
+		Table:        table,
+		Interface:    device,
+		DevicePrefix: m.cfg.ProbeDevicePrefix,
+	})
+	_ = pr.Cleanup(context.Background())
 }
 
 func (m *Manager) teardownAll() {
@@ -414,6 +469,7 @@ func (m *Manager) teardownAll() {
 		if s.Managed != nil {
 			s.Managed.Stop()
 		}
+		m.cleanupDeviceEgress(s.Device, s.RoutingTable)
 	}
 }
 
@@ -723,6 +779,7 @@ func (m *Manager) teardownSlotAt(i int) {
 	if s.Managed != nil {
 		s.Managed.Stop()
 	}
+	m.cleanupDeviceEgress(s.Device, s.RoutingTable)
 }
 
 // lastLiveIndex returns the highest index that holds a non-nil slot, or -1.

@@ -53,7 +53,11 @@ func sanitizePoolConfig(text string) string {
 	}
 	// OpenVPN 2.4.x treats server-pushed redirect-gateway / dhcp-option as fatal
 	// errors when they appear in [PUSH-OPTIONS]. Drop them on the client side so
-	// the tunnel still comes up; egress is handled per-slot via SO_BINDTODEVICE.
+	// the tunnel still comes up. Each pool device then gets its own default
+	// route through a per-device policy route installed by the pool manager
+	// (see pool.setupDeviceEgress): SO_BINDTODEVICE binds the socket to the TUN,
+	// and that route is what actually sends the traffic out through it instead of
+	// the host's default gateway.
 	out = append(out, "pull-filter ignore \"redirect-gateway\"")
 	out = append(out, "pull-filter ignore \"dhcp-option\"")
 	return strings.Join(out, "\n")

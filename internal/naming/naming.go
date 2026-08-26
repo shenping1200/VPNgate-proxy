@@ -50,6 +50,14 @@ const (
 	// accepted 32-bit table ids since 2.6.19.
 	DefaultRoutingTable = 9527
 
+	// PoolRoutingTableBase is the first routing table the proxy pool claims for
+	// its per-device egress routes. Each pool TUN gets its own table
+	// (PoolRoutingTableBase + slot offset) so a packet bound via
+	// SO_BINDTODEVICE to one tunnel can only resolve that tunnel's default
+	// route, never a neighbour's. Kept one id above DefaultRoutingTable (the
+	// single-tunnel table) and well clear of the reserved 253-255.
+	PoolRoutingTableBase = 9528
+
 	// RoutingTableAlias is the symbolic name registered for that table in
 	// rt_tables.d, so `ip rule show` and human operators can see who owns it.
 	RoutingTableAlias = "free_proxy"
