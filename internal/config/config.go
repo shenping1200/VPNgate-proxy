@@ -98,7 +98,7 @@ type Config struct {
 	PoolMode                   string `env:"POOL_MODE" envDefault:"dynamic"`
 	PoolFixedStartPort         int    `env:"POOL_FIXED_START_PORT" envDefault:"50001"`
 	PoolDiscoveryIntervalSecs  int    `env:"POOL_DISCOVERY_INTERVAL_SECONDS" envDefault:"300"`
-	PoolReconcileIntervalSecs  int    `env:"POOL_RECONCILE_INTERVAL_SECONDS" envDefault:"300"`
+	PoolReconcileIntervalSecs  int    `env:"POOL_RECONCILE_INTERVAL_SECONDS" envDefault:"30"`
 	// PoolBuildRetries is how many additional candidate nodes to try (beyond the
 	// first) for each SOCKS5 port, so a single dead node no longer leaves a hole
 	// in the otherwise-contiguous port block. 0 means no extra retries.

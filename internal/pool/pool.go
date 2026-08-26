@@ -615,7 +615,7 @@ func (m *Manager) healthySlotIndices() []int {
 	defer m.mu.Unlock()
 	out := make([]int, 0, len(m.slots))
 	for i, s := range m.slots {
-		if s != nil && s.Managed != nil && s.Managed.Running() {
+		if s != nil && s.Managed != nil && s.Managed.Running() && netx.DeviceExists(s.Device) {
 			out = append(out, i)
 		}
 	}
@@ -629,7 +629,7 @@ func (m *Manager) slotIndexHealthy(i int) bool {
 		return false
 	}
 	s := m.slots[i]
-	return s != nil && s.Managed != nil && s.Managed.Running()
+	return s != nil && s.Managed != nil && s.Managed.Running() && netx.DeviceExists(s.Device)
 }
 
 // connectorForSlot builds a connector bound to the device of the slot at index
@@ -733,6 +733,16 @@ func (m *Manager) liveCount() int {
 }
 
 // slotHealthy reports whether the slot at index i is running.
+// slotHealthy reports whether slot i is fit to carry traffic. A slot is only
+// healthy when its OpenVPN process is alive *and* the TUN device it bound
+// still exists on the host. VPNgate public nodes drop frequently; when that
+// happens OpenVPN often keeps the process alive while it retries, but the kernel
+// tears the interface down (the device shows as [detached]). Treating a process
+// that is merely alive as healthy let those zombie slots linger in the rotation
+// forever — every connection routed to them failed or timed out, which is
+// exactly the "works sometimes" symptom. Requiring the device to exist too
+// makes the slot drop out of the healthy set the instant it dies, so the
+// selector never picks it and reconcile() rebuilds it on the next tick.
 func (m *Manager) slotHealthy(i int) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -740,7 +750,7 @@ func (m *Manager) slotHealthy(i int) bool {
 		return true
 	}
 	s := m.slots[i]
-	return s != nil && s.Managed != nil && s.Managed.Running()
+	return s != nil && s.Managed != nil && s.Managed.Running() && netx.DeviceExists(s.Device)
 }
 
 // setSlot writes slot at index i, growing the slice with nils if necessary.
