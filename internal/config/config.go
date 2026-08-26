@@ -98,7 +98,21 @@ type Config struct {
 	PoolMode                   string `env:"POOL_MODE" envDefault:"dynamic"`
 	PoolFixedStartPort         int    `env:"POOL_FIXED_START_PORT" envDefault:"50001"`
 	PoolDiscoveryIntervalSecs  int    `env:"POOL_DISCOVERY_INTERVAL_SECONDS" envDefault:"300"`
-	PoolReconcileIntervalSecs  int    `env:"POOL_RECONCILE_INTERVAL_SECONDS" envDefault:"30"`
+	// PoolRepairIntervalSecs drives the high-frequency, lightweight pass that
+	// only rebuilds slots whose tunnel died (process gone or TUN device
+	// detached). It must stay short so a dropped VPNgate node is back in the
+	// rotation within seconds, independent of how long the slow grow/shrink
+	// pass takes.
+	PoolRepairIntervalSecs int `env:"POOL_REPAIR_INTERVAL_SECONDS" envDefault:"15"`
+	// PoolBalanceIntervalSecs drives the slow pass that grows/shrinks the pool
+	// toward the target slot count. It is intentionally long: filling 200 slots
+	// against flaky public nodes can take minutes, and we must not let that
+	// block the repair pass.
+	PoolBalanceIntervalSecs int `env:"POOL_BALANCE_INTERVAL_SECONDS" envDefault:"600"`
+	// PoolReconcileIntervalSecs is retained for compatibility; it is no longer
+	// used by the loop (repair/balance have their own intervals) but still
+	// drives an initial full reconcile on startup.
+	PoolReconcileIntervalSecs int `env:"POOL_RECONCILE_INTERVAL_SECONDS" envDefault:"30"`
 	// PoolBuildRetries is how many additional candidate nodes to try (beyond the
 	// first) for each SOCKS5 port, so a single dead node no longer leaves a hole
 	// in the otherwise-contiguous port block. 0 means no extra retries.

@@ -74,7 +74,8 @@ type Manager struct {
 	mu         sync.Mutex
 	slots      []*Slot
 	stopCh     chan struct{}
-	reconMu    sync.Mutex
+	reconMu    sync.Mutex // guards repairDead
+	balanceMu  sync.Mutex // guards balance; independent so repair is never blocked by a slow grow
 	reconciling bool
 
 	// Proxy credentials for the SOCKS5 listeners. They are mutable at runtime so
@@ -143,9 +144,11 @@ func (m *Manager) Stop() {
 
 func (m *Manager) loop(ctx context.Context) {
 	discT := time.NewTicker(time.Duration(m.cfg.PoolDiscoveryIntervalSecs) * time.Second)
-	reconT := time.NewTicker(time.Duration(m.cfg.PoolReconcileIntervalSecs) * time.Second)
+	repairT := time.NewTicker(time.Duration(m.cfg.PoolRepairIntervalSecs) * time.Second)
+	balanceT := time.NewTicker(time.Duration(m.cfg.PoolBalanceIntervalSecs) * time.Second)
 	defer discT.Stop()
-	defer reconT.Stop()
+	defer repairT.Stop()
+	defer balanceT.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -156,19 +159,32 @@ func (m *Manager) loop(ctx context.Context) {
 			if _, err := m.discovery.Discover(ctx); err != nil {
 				slog.Warn("pool discovery failed", "module", "pool", "err", err)
 			}
-		case <-reconT.C:
-			m.reconcile(ctx)
+		case <-repairT.C:
+			m.repairDead(ctx)
+		case <-balanceT.C:
+			m.balance(ctx)
 		}
 	}
 }
 
-// reconcile performs incremental maintenance on the pool: healthy slots keep
-// their port and node; only dead or missing slots are repaired in-place, and
-// new slots are appended when more candidates become available. The whole pool
-// is no longer torn down when the candidate list changes.
+// reconcile runs both passes: a fast repair of dead slots and a slow
+// grow/shrink toward the target. Kept for the initial startup reconcile and
+// manual ReconcileNow; the background loop drives the two passes on separate
+// intervals so a slow grow never delays a dead-slot repair.
 func (m *Manager) reconcile(ctx context.Context) {
+	m.repairDead(ctx)
+	m.balance(ctx)
+}
+
+// repairDead rebuilds any slot whose tunnel has died (OpenVPN process gone or
+// its TUN device detached). It only touches already-allocated slots — it never
+// grows the pool — so it stays cheap and can run every few seconds. This is the
+// path that keeps the rotation healthy when VPNgate nodes drop, which they do
+// constantly; with the old single-reconcile design a slow grow of 200 slots
+// would hold the lock for minutes and leave dropped nodes unrepaired.
+func (m *Manager) repairDead(ctx context.Context) {
 	if !m.reconMu.TryLock() {
-		slog.Warn("pool reconcile already in progress; skipping tick", "module", "pool")
+		slog.Warn("pool repair already in progress; skipping tick", "module", "pool")
 		return
 	}
 	defer m.reconMu.Unlock()
@@ -178,20 +194,8 @@ func (m *Manager) reconcile(ctx context.Context) {
 		slog.Warn("pool candidate fetch failed", "module", "pool", "err", err)
 		return
 	}
-	if len(candidates) > m.cfg.PoolMaxPorts {
-		candidates = candidates[:m.cfg.PoolMaxPorts]
-	}
 
-	target := len(candidates)
-	if target > m.cfg.PoolMaxPorts {
-		target = m.cfg.PoolMaxPorts
-	}
-
-	slog.Info("pool reconcile tick", "module", "pool",
-		"candidates", len(candidates), "live_slots", m.liveCount(),
-		"total_ports", m.slotLen(), "target", target)
-
-	// 1. Repair dead / nil slots in-place, keeping their port.
+	repaired := 0
 	for i := 0; i < m.slotLen(); i++ {
 		if !m.slotHealthy(i) {
 			port := m.cfg.PoolStartPort + i
@@ -199,13 +203,47 @@ func (m *Manager) reconcile(ctx context.Context) {
 			m.teardownSlotAt(i)
 			if slot := m.tryFillPort(ctx, port, candidates); slot != nil {
 				m.setSlot(i, slot)
+				repaired++
 			} else {
 				m.setSlot(i, nil)
 			}
 		}
 	}
+	if repaired > 0 {
+		slog.Info("pool repair pass done", "module", "pool", "repaired", repaired, "live_slots", m.liveCount())
+	}
+}
 
-	// 2. Grow to the target count: fill holes first, then append.
+// balance grows the pool toward the target slot count and shrinks it when the
+// candidate set shrinks. This is the slow pass: filling many slots against
+// flaky public nodes can take minutes, so it runs on a long interval and uses
+// its own mutex — a slow grow therefore never blocks repairDead from fixing
+// dropped nodes.
+func (m *Manager) balance(ctx context.Context) {
+	if !m.balanceMu.TryLock() {
+		slog.Warn("pool balance already in progress; skipping tick", "module", "pool")
+		return
+	}
+	defer m.balanceMu.Unlock()
+
+	candidates, err := m.candidateNodes(ctx)
+	if err != nil {
+		slog.Warn("pool candidate fetch failed", "module", "pool", "err", err)
+		return
+	}
+	if len(candidates) > m.cfg.PoolMaxPorts {
+		candidates = candidates[:m.cfg.PoolMaxPorts]
+	}
+	target := len(candidates)
+	if target > m.cfg.PoolMaxPorts {
+		target = m.cfg.PoolMaxPorts
+	}
+
+	slog.Info("pool balance tick", "module", "pool",
+		"candidates", len(candidates), "live_slots", m.liveCount(),
+		"total_ports", m.slotLen(), "target", target)
+
+	// Grow to the target count: fill holes first, then append.
 	for m.liveCount() < target {
 		hole := m.firstHole()
 		if hole >= 0 {
@@ -223,7 +261,7 @@ func (m *Manager) reconcile(ctx context.Context) {
 		}
 	}
 
-	// 3. Shrink if the candidate pool has shrunk: remove slots from the tail.
+	// Shrink if the candidate pool has shrunk: remove slots from the tail.
 	for m.liveCount() > target {
 		lastIdx := m.lastLiveIndex()
 		if lastIdx < 0 {
@@ -233,9 +271,6 @@ func (m *Manager) reconcile(ctx context.Context) {
 		m.setSlot(lastIdx, nil)
 	}
 	m.trimTrailingNils()
-
-	slog.Info("pool reconcile done", "module", "pool",
-		"live_slots", m.liveCount(), "total_ports", m.slotLen())
 }
 
 // candidateNodes returns the usable nodes, best first, excluding ones already
