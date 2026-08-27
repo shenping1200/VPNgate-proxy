@@ -124,6 +124,10 @@ func (m *Manager) Start(ctx context.Context) error {
 	if err := m.startRotateGateway(ctx); err != nil {
 		slog.Warn("pool rotate gateway failed to start", "module", "pool", "err", err)
 	}
+	// Remove any stale policy rules left by prior crashed/restarted instances.
+	// A rule whose device no longer exists cannot be steering live traffic, and
+	// leaving it risks diverting a future unrelated device into a stale table.
+	m.cleanupOrphanedEgress()
 	// Run the initial full reconcile in the background: filling 200 slots
 	// against flaky public nodes can take minutes, and we must not block the
 	// background loop from starting -- its repair ticker is what keeps dropped
@@ -199,6 +203,10 @@ func (m *Manager) repairDead(ctx context.Context) {
 		return
 	}
 
+	healthy, detached := m.countHealthyDetached()
+	slog.Info("pool repair tick", "module", "pool",
+		"healthy", healthy, "detached", detached, "total", m.slotLen(), "live", m.liveCount())
+
 	repaired := 0
 	for i := 0; i < m.slotLen(); i++ {
 		if !m.slotHealthy(i) {
@@ -243,9 +251,11 @@ func (m *Manager) balance(ctx context.Context) {
 		target = m.cfg.PoolMaxPorts
 	}
 
+	healthy, detached := m.countHealthyDetached()
 	slog.Info("pool balance tick", "module", "pool",
 		"candidates", len(candidates), "live_slots", m.liveCount(),
-		"total_ports", m.slotLen(), "target", target)
+		"total_ports", m.slotLen(), "target", target,
+		"healthy", healthy, "detached", detached)
 
 	// Grow to the target count: fill holes first, then append.
 	for m.liveCount() < target {
@@ -409,6 +419,14 @@ func (m *Manager) startNode(ctx context.Context, port int, node domain.ProxyNode
 		managed.Stop()
 		return nil
 	}
+	// If OpenVPN exits on its own (VPNgate node drop), tear the slot down
+	// immediately instead of waiting for the next repair tick. Stop() is
+	// idempotent, so a later explicit teardown is harmless.
+	managed.SetExitHandler(func(code int) {
+		slog.Warn("pool tunnel exited unexpectedly", "module", "pool",
+			"port", port, "device", device, "exit_code", code)
+		m.teardownSlotAt(offset)
+	})
 	connector := proxy.NewSocketConnector(device, m.cfg.ProxyDNSServer, m.cfg.ProxyConnectTimeout())
 	// Credentials are read live from the manager on every connection so a
 	// runtime rotation (via the web panel) applies immediately to all ports,
@@ -491,6 +509,40 @@ func (m *Manager) cleanupDeviceEgress(device string, table int) {
 		DevicePrefix: m.cfg.ProbeDevicePrefix,
 	})
 	_ = pr.Cleanup(context.Background())
+	// Belt-and-suspenders: if the device has already disappeared from the host
+	// (VPNgate drop leaves the TUN detached), PolicyRouter.Cleanup may not see
+	// the rule because ip rule show no longer lists it under the live oif. The
+	// orphan cleaner removes rules whose device does not exist regardless of
+	// ownership attribution.
+	if !netx.DeviceExists(device) {
+		_ = netx.CleanupOrphanedRules(context.Background(), nil, device)
+	}
+}
+
+// cleanupOrphanedEgress removes policy rules for every project-owned device
+// that is no longer present on the host. Called once at startup so a restart
+// wipes leftovers from a previous crash/restart rather than letting them stack.
+func (m *Manager) cleanupOrphanedEgress() {
+	if runtime.GOOS != "linux" {
+		return
+	}
+	entries, err := os.ReadDir("/sys/class/net")
+	if err != nil {
+		slog.Warn("pool cannot list network devices for orphan cleanup", "module", "pool", "err", err)
+		return
+	}
+	for _, e := range entries {
+		dev := e.Name()
+		if !naming.HasDevicePrefix(dev, m.cfg.ProbeDevicePrefix) {
+			continue
+		}
+		if netx.DeviceExists(dev) {
+			continue
+		}
+		if removed := netx.CleanupOrphanedRules(context.Background(), nil, dev); len(removed) > 0 {
+			slog.Info("pool cleaned up orphaned egress rules", "module", "pool", "device", dev, "removed", removed)
+		}
+	}
 }
 
 func (m *Manager) teardownAll() {
@@ -790,6 +842,25 @@ func (m *Manager) slotHealthy(i int) bool {
 	}
 	s := m.slots[i]
 	return s != nil && s.Managed != nil && s.Managed.Running() && netx.DeviceExists(s.Device)
+}
+
+// countHealthyDetached returns the number of slots that pass the full health
+// check and the number whose TUN device has already disappeared (detached).
+// Both counts are cheap: DeviceExists is a single os.Stat.
+func (m *Manager) countHealthyDetached() (healthy, detached int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, s := range m.slots {
+		if s == nil || s.Managed == nil {
+			continue
+		}
+		if s.Managed.Running() && netx.DeviceExists(s.Device) {
+			healthy++
+		} else if !netx.DeviceExists(s.Device) {
+			detached++
+		}
+	}
+	return
 }
 
 // setSlot writes slot at index i, growing the slice with nils if necessary.
