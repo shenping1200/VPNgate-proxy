@@ -1,0 +1,27 @@
+[Unit]
+Description=VPNgate Proxy Pool (multi-port SOCKS5, one port per VPNGate node)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart={{BIN}} pool
+Environment=FREE_PROXY_POOL_ENABLED=true
+Environment=FREE_PROXY_POOL_START_PORT={{POOL_START_PORT}}
+Environment=FREE_PROXY_POOL_MAX_PORTS={{POOL_MAX_PORTS}}
+Environment=FREE_PROXY_POOL_ROTATE_ENABLED=true
+Environment=FREE_PROXY_POOL_ROTATE_PORT={{POOL_ROTATE_PORT}}
+Environment=FREE_PROXY_PROXY_USERNAME={{PROXY_USER}}
+Environment=FREE_PROXY_PROXY_PASSWORD={{PROXY_PASS}}
+Environment=FREE_PROXY_DATA_DIR={{DATA_DIR}}
+Environment=FREE_PROXY_OPENVPN_COMMAND={{OPENVPN}}
+Environment=FREE_PROXY_POOL_WEB_ENABLED=true
+Environment=FREE_PROXY_POOL_WEB_HOST=0.0.0.0
+Environment=FREE_PROXY_POOL_WEB_PORT={{POOL_WEB_PORT}}
+Environment=FREE_PROXY_POOL_WEB_USERNAME={{WEB_USER}}
+Environment=FREE_PROXY_POOL_WEB_PASSWORD={{WEB_PASS}}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
