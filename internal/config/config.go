@@ -113,6 +113,15 @@ type Config struct {
 	// used by the loop (repair/balance have their own intervals) but still
 	// drives an initial full reconcile on startup.
 	PoolReconcileIntervalSecs int `env:"POOL_RECONCILE_INTERVAL_SECONDS" envDefault:"30"`
+	// PoolProbeIntervalSecs drives the active L4 forwarding probe that verifies
+	// each live tunnel actually carries traffic to the internet. VPNgate public
+	// nodes frequently complete the OpenVPN handshake and bring the TUN up but
+	// then drop every forwarded packet (a "black hole"); a slot that merely
+	// looks alive would still fail every connection. The probe marks such slots
+	// unhealthy so the repair pass recycles them onto a different node. It must
+	// be at least as frequent as the repair pass so black holes are caught
+	// before (or soon after) they would serve traffic.
+	PoolProbeIntervalSecs int `env:"POOL_PROBE_INTERVAL_SECONDS" envDefault:"30"`
 	// PoolBuildRetries is how many additional candidate nodes to try (beyond the
 	// first) for each SOCKS5 port, so a single dead node no longer leaves a hole
 	// in the otherwise-contiguous port block. 0 means no extra retries.
@@ -281,6 +290,7 @@ func (c *Config) ParsedDNSRepairServers() []string {
 func (c *Config) SessionTTL() time.Duration          { return secs(float64(c.SessionTTLSeconds)) }
 func (c *Config) ProxyConnectTimeout() time.Duration { return secs(c.ProxyConnectTimeoutSecs) }
 func (c *Config) ProxyIdleTimeout() time.Duration    { return secs(c.ProxyIdleTimeoutSecs) }
+func (c *Config) PoolProbeInterval() time.Duration    { return secs(float64(c.PoolProbeIntervalSecs)) }
 func (c *Config) OpenVPNTestTimeout() time.Duration  { return secs(c.OpenVPNTestTimeoutSecs) }
 func (c *Config) OpenVPNConnectTimeout() time.Duration {
 	return secs(c.OpenVPNConnectTimeoutSecs)

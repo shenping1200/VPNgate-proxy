@@ -49,6 +49,16 @@ type Slot struct {
 	Gateway      *proxy.Gateway
 	RoutingTable int // dedicated policy routing table for this device's egress
 	StartedAt    time.Time
+
+	// Forwarding health, maintained by the background L4 probe (probeAll). A
+	// slot is only eligible for traffic when ForwardOK is true, i.e. the tunnel
+	// actually carries packets to the internet. VPNgate public nodes routinely
+	// complete the handshake and bring the TUN up but then black-hole every
+	// forwarded packet; this flag is what keeps those zombies out of rotation.
+	ForwardOK        bool
+	ForwardLatencyMS int
+	ProbeExitIP      string
+	LastProbeAt      time.Time
 }
 
 // SlotView is the safe, serialisable view of a Slot for API/CLI output.
@@ -76,6 +86,7 @@ type Manager struct {
 	stopCh     chan struct{}
 	reconMu    sync.Mutex // guards repairDead
 	balanceMu  sync.Mutex // guards balance; independent so repair is never blocked by a slow grow
+	probeMu    sync.Mutex // guards probeAll; TryLock so a slow tick never overlaps the next
 	reconciling bool
 
 	// Proxy credentials for the SOCKS5 listeners. They are mutable at runtime so
@@ -134,6 +145,10 @@ func (m *Manager) Start(ctx context.Context) error {
 	// nodes healthy within seconds.
 	go m.reconcile(ctx)
 	go m.loop(ctx)
+	// Kick an early L4 forwarding probe so black-hole tunnels (handshake
+	// complete, device up, but packets never forwarded) are caught and recycled
+	// well before the first scheduled probe tick.
+	time.AfterFunc(10*time.Second, func() { m.probeAll(ctx) })
 	return nil
 }
 
@@ -154,9 +169,11 @@ func (m *Manager) loop(ctx context.Context) {
 	discT := time.NewTicker(time.Duration(m.cfg.PoolDiscoveryIntervalSecs) * time.Second)
 	repairT := time.NewTicker(time.Duration(m.cfg.PoolRepairIntervalSecs) * time.Second)
 	balanceT := time.NewTicker(time.Duration(m.cfg.PoolBalanceIntervalSecs) * time.Second)
+	probeT := time.NewTicker(m.cfg.PoolProbeInterval())
 	defer discT.Stop()
 	defer repairT.Stop()
 	defer balanceT.Stop()
+	defer probeT.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -167,6 +184,8 @@ func (m *Manager) loop(ctx context.Context) {
 			if _, err := m.discovery.Discover(ctx); err != nil {
 				slog.Warn("pool discovery failed", "module", "pool", "err", err)
 			}
+		case <-probeT.C:
+			m.probeAll(ctx)
 		case <-repairT.C:
 			m.repairDead(ctx)
 		case <-balanceT.C:
@@ -203,9 +222,10 @@ func (m *Manager) repairDead(ctx context.Context) {
 		return
 	}
 
-	healthy, detached := m.countHealthyDetached()
+	healthy, detached, forwarding := m.countHealthyDetached()
 	slog.Info("pool repair tick", "module", "pool",
-		"healthy", healthy, "detached", detached, "total", m.slotLen(), "live", m.liveCount())
+		"healthy", healthy, "detached", detached, "forwarding", forwarding,
+		"total", m.slotLen(), "live", m.liveCount())
 
 	repaired := 0
 	for i := 0; i < m.slotLen(); i++ {
@@ -251,11 +271,11 @@ func (m *Manager) balance(ctx context.Context) {
 		target = m.cfg.PoolMaxPorts
 	}
 
-	healthy, detached := m.countHealthyDetached()
+	healthy, detached, forwarding := m.countHealthyDetached()
 	slog.Info("pool balance tick", "module", "pool",
 		"candidates", len(candidates), "live_slots", m.liveCount(),
 		"total_ports", m.slotLen(), "target", target,
-		"healthy", healthy, "detached", detached)
+		"healthy", healthy, "detached", detached, "forwarding", forwarding)
 
 	// Grow to the target count: fill holes first, then append.
 	for m.liveCount() < target {
@@ -473,6 +493,7 @@ func (m *Manager) startNode(ctx context.Context, port int, node domain.ProxyNode
 		Gateway:      gw,
 		RoutingTable: table,
 		StartedAt:    time.Now(),
+		ForwardOK:    true, // optimistic; the first probeAll tick confirms/retracts
 	}
 }
 
@@ -823,17 +844,19 @@ func (m *Manager) liveCount() int {
 	return n
 }
 
-// slotHealthy reports whether the slot at index i is running.
 // slotHealthy reports whether slot i is fit to carry traffic. A slot is only
 // healthy when its OpenVPN process is alive *and* the TUN device it bound
-// still exists on the host. VPNgate public nodes drop frequently; when that
-// happens OpenVPN often keeps the process alive while it retries, but the kernel
-// tears the interface down (the device shows as [detached]). Treating a process
-// that is merely alive as healthy let those zombie slots linger in the rotation
-// forever — every connection routed to them failed or timed out, which is
-// exactly the "works sometimes" symptom. Requiring the device to exist too
-// makes the slot drop out of the healthy set the instant it dies, so the
-// selector never picks it and reconcile() rebuilds it on the next tick.
+// still exists on the host *and* an active L4 probe has confirmed the tunnel
+// actually forwards packets to the internet. VPNgate public nodes drop
+// frequently; when that happens OpenVPN often keeps the process alive while it
+// retries, but the kernel tears the interface down (the device shows as
+// [detached]) — that first case is caught by requiring the device to exist. The
+// second, nastier case is a "black hole": the handshake completes and the TUN
+// comes up, but the upstream node drops every forwarded packet, so a connection
+// routed to it simply hangs until it times out. That is caught by ForwardOK,
+// which the background probe (probeAll) maintains. Requiring all three makes a
+// slot drop out of the healthy set the instant it cannot serve real traffic, so
+// the selector never picks it and reconcile() rebuilds it on the next tick.
 func (m *Manager) slotHealthy(i int) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -841,26 +864,137 @@ func (m *Manager) slotHealthy(i int) bool {
 		return true
 	}
 	s := m.slots[i]
-	return s != nil && s.Managed != nil && s.Managed.Running() && netx.DeviceExists(s.Device)
+	return s != nil && s.Managed != nil && s.Managed.Running() && netx.DeviceExists(s.Device) && s.ForwardOK
 }
 
 // countHealthyDetached returns the number of slots that pass the full health
-// check and the number whose TUN device has already disappeared (detached).
-// Both counts are cheap: DeviceExists is a single os.Stat.
-func (m *Manager) countHealthyDetached() (healthy, detached int) {
+// check, the number whose TUN device has already disappeared (detached), and
+// the number that are up but failed the L4 forwarding probe (black holes).
+// All three counts are cheap: DeviceExists is a single os.Stat and ForwardOK is
+// a cached probe result.
+func (m *Manager) countHealthyDetached() (healthy, detached, forwarding int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, s := range m.slots {
 		if s == nil || s.Managed == nil {
 			continue
 		}
-		if s.Managed.Running() && netx.DeviceExists(s.Device) {
+		switch {
+		case s.Managed.Running() && netx.DeviceExists(s.Device) && s.ForwardOK:
 			healthy++
-		} else if !netx.DeviceExists(s.Device) {
+			forwarding++
+		case !netx.DeviceExists(s.Device):
 			detached++
 		}
 	}
 	return
+}
+
+// probeAll runs the active L4 forwarding probe across every live slot. It is
+// driven by its own ticker in loop() and also kicked shortly after startup. A
+// slot is only marked unhealthy (ForwardOK=false) when at least one other slot
+// on the same tick still forwarded, which proves the probe path itself works —
+// that guards against a global probe-infrastructure outage (every echo target
+// down, DNS through the tunnel broken) collapsing the entire pool and recycling
+// perfectly good nodes onto a doomed search.
+func (m *Manager) probeAll(ctx context.Context) {
+	if !m.probeMu.TryLock() {
+		slog.Warn("pool probe already in progress; skipping tick", "module", "pool")
+		return
+	}
+	defer m.probeMu.Unlock()
+
+	// Snapshot the devices under lock, then probe without holding the lock so a
+	// slow connect never stalls connection selection or the other loops.
+	m.mu.Lock()
+	type item struct {
+		idx    int
+		device string
+	}
+	items := make([]item, 0, len(m.slots))
+	for i, s := range m.slots {
+		if s == nil || s.Managed == nil || !s.Managed.Running() || !netx.DeviceExists(s.Device) {
+			continue
+		}
+		items = append(items, item{i, s.Device})
+	}
+	m.mu.Unlock()
+
+	if len(items) == 0 {
+		return
+	}
+
+	// Bound the per-slot probe timeout so a run of black holes cannot stall the
+	// tick forever; the connect itself is the signal (SYN out, no SYN-ACK back).
+	probeTimeout := m.cfg.ProxyConnectTimeout()
+	if probeTimeout > 6*time.Second {
+		probeTimeout = 6 * time.Second
+	}
+	// Fan out so 50 slots probe in a handful of batches rather than serially.
+	const probeConcurrency = 12
+	sem := make(chan struct{}, probeConcurrency)
+	type result struct {
+		idx    int
+		device string
+		ok     bool
+		exitIP string
+		ms     int
+		err    error
+	}
+	results := make([]result, len(items))
+	var wg sync.WaitGroup
+	for k, it := range items {
+		wg.Add(1)
+		go func(k int, dev string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			ok, exitIP, ms, perr := proxy.ProbeDeviceForwarding(ctx, dev, m.cfg.ProxyDNSServer, probeTimeout)
+			results[k] = result{idx: it.idx, device: dev, ok: ok, exitIP: exitIP, ms: ms, err: perr}
+		}(k, it.device)
+	}
+	wg.Wait()
+
+	anyOK := false
+	var firstErr error
+	for _, r := range results {
+		m.mu.Lock()
+		if r.idx < len(m.slots) && m.slots[r.idx] != nil {
+			s := m.slots[r.idx]
+			if r.ok {
+				s.ForwardOK = true
+				s.ForwardLatencyMS = r.ms
+				if r.exitIP != "" {
+					s.ProbeExitIP = r.exitIP
+				}
+			} else if anyOK {
+				// Only downgrade once we know the probe path works for at
+				// least one slot this tick; otherwise a shared infra failure
+				// would wrongly recycle the whole pool.
+				s.ForwardOK = false
+				s.ProbeExitIP = ""
+			}
+			s.LastProbeAt = time.Now()
+		}
+		m.mu.Unlock()
+		if r.ok {
+			anyOK = true
+			slog.Debug("pool egress probe ok", "module", "pool", "device", r.device, "exit_ip", r.exitIP, "ms", r.ms)
+		} else if firstErr == nil {
+			firstErr = r.err
+			slog.Warn("pool egress probe failed", "module", "pool", "device", r.device, "err", errStr(r.err))
+		}
+	}
+	if !anyOK {
+		slog.Warn("pool egress probe: no slot forwarded this tick; possible probe-infra outage, keeping prior healthy state", "module", "pool", "probed", len(items), "err", errStr(firstErr))
+	}
+}
+
+func errStr(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 // setSlot writes slot at index i, growing the slice with nils if necessary.
