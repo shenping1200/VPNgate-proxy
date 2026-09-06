@@ -100,14 +100,34 @@ fi
 # ----------------------------------------------------------------------------- go
 say "step 3/7 go toolchain"
 export PATH="/usr/local/go/bin:$PATH"
-if ! command -v go >/dev/null 2>&1 || [ "$(go version 2>/dev/null | awk '{print $3}')" != "go${GO_VER}" ]; then
+# Any Go >= 1.21 is fine: GOTOOLCHAIN=auto (set below) fetches the exact
+# toolchain go.mod asks for. Only install when go is missing or too old,
+# otherwise every re-run would needlessly re-download the archive.
+go_ok=0
+if command -v go >/dev/null 2>&1; then
+    _v="$(go version 2>/dev/null | awk '{print $3}' | sed 's/^go//')"   # e.g. 1.26.4
+    _maj="${_v%%.*}"
+    _min="$(echo "$_v" | cut -d. -f2)"
+    case "$_maj" in
+        ''|*[!0-9]*) _maj=0 ;;
+    esac
+    case "$_min" in
+        ''|*[!0-9]*) _min=0 ;;
+    esac
+    if [ "$_maj" -gt 1 ] || { [ "$_maj" -eq 1 ] && [ "$_min" -ge 21 ]; }; then
+        go_ok=1
+    fi
+fi
+if [ "$go_ok" = "1" ]; then
+    echo "    reusing $(go version)"
+else
     echo "    installing go${GO_VER}.linux-${GOARCH}"
     curl -fsSL "https://go.dev/dl/go${GO_VER}.linux-${GOARCH}.tar.gz" -o /tmp/go.tgz
     rm -rf /usr/local/go
     tar -C /usr/local -xzf /tmp/go.tgz
     rm -f /tmp/go.tgz
+    echo "    $(go version)"
 fi
-echo "    $(go version)"
 # go.mod pins a newer toolchain; GOTOOLCHAIN=auto fetches it on demand.
 export GOTOOLCHAIN=auto
 export CGO_ENABLED=0
